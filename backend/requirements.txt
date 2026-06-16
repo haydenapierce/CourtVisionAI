@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+google-api-python-client
+python-dotenv
+pandas
+scikit-learn
