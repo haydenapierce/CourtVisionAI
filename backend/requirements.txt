@@ -1,6 +1,10 @@
 fastapi
 uvicorn
 google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
 python-dotenv
 pandas
 scikit-learn
+requests
