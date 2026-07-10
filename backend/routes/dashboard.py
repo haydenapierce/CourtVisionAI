@@ -3,6 +3,7 @@ from collections import defaultdict, Counter
 from datetime import datetime, timedelta
 import unicodedata
 from functools import lru_cache
+import threading
 
 from services.youtube_service import (
     get_channel_stats_by_handle,
@@ -20,7 +21,8 @@ from database.db import (
     get_best_player_revenue_summary,
     get_best_channel_rpm,
     get_best_revenue_summary,
-    get_latest_video_sync_info
+    get_latest_video_sync_info,
+    get_best_video_revenue_entries
 )
 
 from data.player_database import NBA_PLAYERS
@@ -216,7 +218,54 @@ def get_video_age_days(published):
         return 9999
 
 
-def attach_synced_money(video):
+def get_lifetime_revenue_lookup():
+    """
+    Loads all synced lifetime video revenue in one database read.
+
+    The previous dashboard code called get_best_revenue_for_video separately
+    for every saved video. Each call opened SQLite several times and fetched
+    five period rows, which made startup scale poorly as the channel grew.
+    """
+    lookup = {}
+
+    try:
+        entries = get_best_video_revenue_entries() or []
+    except Exception:
+        entries = []
+
+    for entry in entries:
+        if str(entry.get("period_type") or "") != "lifetime":
+            continue
+
+        video_id = str(entry.get("video_id") or "").strip()
+        if not video_id:
+            continue
+
+        views = safe_int(entry.get("views"))
+        revenue = safe_float(
+            entry.get("amount")
+            or entry.get("estimated_revenue")
+        )
+        rpm = safe_float(entry.get("rpm"))
+
+        if rpm <= 0 and revenue > 0 and views > 0:
+            rpm = (revenue / views) * 1000
+
+        lookup[video_id] = {
+            "total_revenue": round(revenue, 2),
+            "estimated_revenue": round(revenue, 2),
+            "average_rpm": round(rpm, 2),
+            "rpm": round(rpm, 2),
+            "views": views,
+            "entries": 1 if revenue > 0 or views > 0 or rpm > 0 else 0,
+            "source": entry.get("source", "youtube_analytics_api_revenue_tracker"),
+            "periods": {"lifetime": round(revenue, 2)}
+        }
+
+    return lookup
+
+
+def attach_synced_money(video, money=None):
     """
     Safely attaches synced YouTube Analytics / Revenue Tracker money.
 
@@ -224,10 +273,11 @@ def attach_synced_money(video):
     missing, incomplete, or still lagging from YouTube Analytics, the video
     still returns normally with zero money fields.
     """
-    try:
-        money = get_best_revenue_for_video(video) or {}
-    except Exception:
-        money = {}
+    if money is None:
+        try:
+            money = get_best_revenue_for_video(video) or {}
+        except Exception:
+            money = {}
 
     revenue = float(
         money.get("total_revenue")
@@ -1461,11 +1511,17 @@ def saved_videos():
     every video. This route should still show all saved channel videos.
     """
     raw_videos = get_saved_videos()
+    revenue_lookup = get_lifetime_revenue_lookup()
     videos = []
 
     for video in raw_videos:
         try:
-            videos.append(attach_synced_money(video))
+            videos.append(
+                attach_synced_money(
+                    video,
+                    revenue_lookup.get(str(video.get("video_id") or "").strip())
+                )
+            )
         except Exception as error:
             fallback = dict(video)
             fallback["synced_revenue"] = 0
@@ -1499,6 +1555,7 @@ def player_rankings():
     Strategy Center, and older cards all read the same data safely.
     """
     videos = get_saved_videos()
+    revenue_lookup = get_lifetime_revenue_lookup()
 
     player_map = defaultdict(lambda: {
         "player": "Unknown",
@@ -1554,10 +1611,10 @@ def player_rankings():
                 "thumbnail": video.get("thumbnail", "")
             }
 
-        try:
-            money = get_best_revenue_for_video(video) or {}
-        except Exception:
-            money = {}
+        money = revenue_lookup.get(
+            str(video.get("video_id") or "").strip(),
+            {}
+        )
 
         revenue = safe_float(
             money.get("total_revenue")
@@ -5067,8 +5124,17 @@ def build_channel_brain_recommendations(videos):
 _AUTO_SYNC_STATE = {
     "dashboard_sync_running": False,
     "last_dashboard_sync": "",
-    "last_dashboard_sync_result": None
+    "last_dashboard_sync_result": None,
+    "stage": "idle",
+    "progress": 0,
+    "message": "Waiting",
 }
+
+
+def _set_dashboard_sync_stage(stage, progress, message):
+    _AUTO_SYNC_STATE["stage"] = stage
+    _AUTO_SYNC_STATE["progress"] = int(max(0, min(100, progress)))
+    _AUTO_SYNC_STATE["message"] = message
 
 
 def run_dashboard_sync_safely(force=False):
@@ -5105,11 +5171,16 @@ def run_dashboard_sync_safely(force=False):
         }
 
     _AUTO_SYNC_STATE["dashboard_sync_running"] = True
+    _set_dashboard_sync_stage("starting", 5, "Starting channel sync")
 
     try:
+        _set_dashboard_sync_stage("youtube", 20, "Checking YouTube uploads and channel data")
         result = sync_channel()
+        _set_dashboard_sync_stage("database", 90, "Saving refreshed video statistics")
         _AUTO_SYNC_STATE["last_dashboard_sync"] = datetime.now().isoformat(timespec="seconds")
         _AUTO_SYNC_STATE["last_dashboard_sync_result"] = result
+
+        _set_dashboard_sync_stage("complete", 100, "Channel sync complete")
 
         return {
             "ok": True,
@@ -5120,6 +5191,7 @@ def run_dashboard_sync_safely(force=False):
         }
 
     except Exception as error:
+        _set_dashboard_sync_stage("error", 0, str(error))
         _AUTO_SYNC_STATE["last_dashboard_sync"] = datetime.now().isoformat(timespec="seconds")
         _AUTO_SYNC_STATE["last_dashboard_sync_result"] = {
             "ok": False,
@@ -5239,5 +5311,8 @@ def dashboard_sync_status():
     return {
         "dashboard_sync_running": _AUTO_SYNC_STATE["dashboard_sync_running"],
         "last_dashboard_sync": _AUTO_SYNC_STATE["last_dashboard_sync"],
-        "last_dashboard_sync_result": _AUTO_SYNC_STATE["last_dashboard_sync_result"]
+        "last_dashboard_sync_result": _AUTO_SYNC_STATE["last_dashboard_sync_result"],
+        "stage": _AUTO_SYNC_STATE["stage"],
+        "progress": _AUTO_SYNC_STATE["progress"],
+        "message": _AUTO_SYNC_STATE["message"],
     }

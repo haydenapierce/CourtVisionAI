@@ -1,8 +1,25 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 from database.db import create_connection
+from datetime import datetime, timedelta
 
 router = APIRouter()
+
+_STUDIO_TABLE_READY = False
+_STUDIO_READ_CACHE = {
+    "summary_created_at": None,
+    "summary_payload": None,
+    "rows_created_at": None,
+    "rows_payload": None,
+}
+_STUDIO_READ_CACHE_SECONDS = 120
+
+
+def clear_studio_read_cache():
+    _STUDIO_READ_CACHE["summary_created_at"] = None
+    _STUDIO_READ_CACHE["summary_payload"] = None
+    _STUDIO_READ_CACHE["rows_created_at"] = None
+    _STUDIO_READ_CACHE["rows_payload"] = None
 
 
 class StudioBreakdownEntry(BaseModel):
@@ -30,6 +47,11 @@ class StudioBreakdownEntry(BaseModel):
 
 
 def ensure_studio_breakdowns_table():
+    global _STUDIO_TABLE_READY
+
+    if _STUDIO_TABLE_READY:
+        return
+
     connection = create_connection()
     cursor = connection.cursor()
 
@@ -64,6 +86,7 @@ def ensure_studio_breakdowns_table():
 
     connection.commit()
     connection.close()
+    _STUDIO_TABLE_READY = True
 
 
 def row_to_dict(row):
@@ -107,6 +130,16 @@ def studio_breakdown_types():
 
 @router.get("/studio-breakdowns/summary")
 def studio_breakdowns_summary():
+    cached_at = _STUDIO_READ_CACHE.get("summary_created_at")
+    cached_payload = _STUDIO_READ_CACHE.get("summary_payload")
+
+    if cached_at and cached_payload:
+        try:
+            if datetime.now() - cached_at <= timedelta(seconds=_STUDIO_READ_CACHE_SECONDS):
+                return cached_payload
+        except Exception:
+            pass
+
     ensure_studio_breakdowns_table()
 
     connection = create_connection()
@@ -141,7 +174,7 @@ def studio_breakdowns_summary():
 
     connection.close()
 
-    return {
+    payload = {
         "summary": {
             "total_entries": totals["total_entries"] or 0,
             "total_views": totals["total_views"] or 0,
@@ -153,9 +186,24 @@ def studio_breakdowns_summary():
         }
     }
 
+    _STUDIO_READ_CACHE["summary_created_at"] = datetime.now()
+    _STUDIO_READ_CACHE["summary_payload"] = payload
+    return payload
+
+
 
 @router.get("/studio-breakdowns")
 def get_studio_breakdowns():
+    cached_at = _STUDIO_READ_CACHE.get("rows_created_at")
+    cached_payload = _STUDIO_READ_CACHE.get("rows_payload")
+
+    if cached_at and cached_payload:
+        try:
+            if datetime.now() - cached_at <= timedelta(seconds=_STUDIO_READ_CACHE_SECONDS):
+                return cached_payload
+        except Exception:
+            pass
+
     ensure_studio_breakdowns_table()
 
     connection = create_connection()
@@ -170,9 +218,12 @@ def get_studio_breakdowns():
     rows = cursor.fetchall()
     connection.close()
 
-    return {
+    payload = {
         "studio_breakdowns": [row_to_dict(row) for row in rows]
     }
+    _STUDIO_READ_CACHE["rows_created_at"] = datetime.now()
+    _STUDIO_READ_CACHE["rows_payload"] = payload
+    return payload
 
 
 @router.get("/studio-breakdowns/{breakdown_type}")

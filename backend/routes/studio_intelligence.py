@@ -1,7 +1,14 @@
 from fastapi import APIRouter
 from database.db import create_connection
+from datetime import datetime, timedelta
 
 router = APIRouter()
+
+STUDIO_INTELLIGENCE_CACHE = {
+    "created_at": None,
+    "payload": None,
+}
+STUDIO_INTELLIGENCE_CACHE_SECONDS = 300
 
 
 def safe_number(value):
@@ -105,6 +112,66 @@ def get_breakdown_rankings(breakdown_type, limit=25):
         })
 
     return cleaned
+
+
+def get_all_breakdown_rankings(limit_per_type=25):
+    """
+    Reads every Studio breakdown category in one SQLite query rather than
+    opening the database once for each of roughly 27 categories.
+    """
+    ensure_studio_breakdowns_table()
+
+    connection = create_connection()
+    cursor = connection.cursor()
+
+    cursor.execute("""
+    SELECT
+        item_name,
+        breakdown_type,
+        period_type,
+        SUM(views) as total_views,
+        SUM(watch_time_hours) as total_watch_time_hours,
+        SUM(impressions) as total_impressions,
+        SUM(estimated_revenue) as total_revenue,
+        SUM(subscribers) as total_subscribers,
+        AVG(ctr) as average_ctr,
+        AVG(rpm) as average_rpm,
+        AVG(cpm) as average_cpm,
+        AVG(percentage) as average_percentage,
+        COUNT(*) as entries
+    FROM studio_breakdowns
+    GROUP BY item_name, breakdown_type, period_type
+    ORDER BY breakdown_type ASC, total_views DESC
+    """)
+
+    grouped = {}
+
+    for raw_row in cursor.fetchall():
+        row = dict(raw_row)
+        breakdown_type = row.get("breakdown_type") or "unknown"
+        rows = grouped.setdefault(breakdown_type, [])
+
+        if len(rows) >= limit_per_type:
+            continue
+
+        rows.append({
+            "item_name": row.get("item_name") or "Unknown",
+            "breakdown_type": breakdown_type,
+            "period_type": normalize_period(row.get("period_type")),
+            "total_views": int(row.get("total_views") or 0),
+            "total_watch_time_hours": round(safe_number(row.get("total_watch_time_hours")), 2),
+            "total_impressions": int(row.get("total_impressions") or 0),
+            "total_revenue": round(safe_number(row.get("total_revenue")), 2),
+            "total_subscribers": int(row.get("total_subscribers") or 0),
+            "average_ctr": round(safe_number(row.get("average_ctr")), 2),
+            "average_rpm": round(safe_number(row.get("average_rpm")), 2),
+            "average_cpm": round(safe_number(row.get("average_cpm")), 2),
+            "average_percentage": round(safe_number(row.get("average_percentage")), 2),
+            "entries": int(row.get("entries") or 0),
+        })
+
+    connection.close()
+    return grouped
 
 
 def top_item(rankings):
@@ -371,39 +438,50 @@ def build_growth_opportunities(data):
 
 @router.get("/studio-intelligence")
 def studio_intelligence():
+    cached_at = STUDIO_INTELLIGENCE_CACHE.get("created_at")
+    cached_payload = STUDIO_INTELLIGENCE_CACHE.get("payload")
+
+    if cached_at and cached_payload:
+        try:
+            if datetime.now() - cached_at <= timedelta(seconds=STUDIO_INTELLIGENCE_CACHE_SECONDS):
+                return cached_payload
+        except Exception:
+            pass
+
+    grouped = get_all_breakdown_rankings()
+
     data = {
-        "countries": get_breakdown_rankings("country"),
-        "cities": get_breakdown_rankings("city"),
-        "traffic_sources": get_breakdown_rankings("traffic_source"),
-        "playlists": get_breakdown_rankings("playlist"),
-        "devices": get_breakdown_rankings("device_type"),
-        "operating_systems": get_breakdown_rankings("operating_system"),
-        "revenue_sources": get_breakdown_rankings("revenue_source"),
-        "ad_types": get_breakdown_rankings("ad_type"),
-        "viewer_ages": get_breakdown_rankings("viewer_age"),
-        "viewer_genders": get_breakdown_rankings("viewer_gender"),
-        "new_returning_viewers": get_breakdown_rankings("new_returning_viewers"),
-        "subscription_sources": get_breakdown_rankings("subscription_source"),
-        "subscription_statuses": get_breakdown_rankings("subscription_status"),
-        "youtube_products": get_breakdown_rankings("youtube_product"),
-        "end_screen_elements": get_breakdown_rankings("end_screen_element"),
-        "end_screen_element_types": get_breakdown_rankings("end_screen_element_type"),
-        "cards": get_breakdown_rankings("card"),
-        "card_types": get_breakdown_rankings("card_type"),
-        "playback_locations": get_breakdown_rankings("playback_location"),
-        "player_types": get_breakdown_rankings("player_type"),
-        "sharing_services": get_breakdown_rankings("sharing_service"),
-        "community_posts": get_breakdown_rankings("community_post"),
-        "subtitles_cc": get_breakdown_rankings("subtitles_cc"),
-        "video_info_languages": get_breakdown_rankings("video_info_language"),
-        "translation_uses": get_breakdown_rankings("translation_use"),
-        "organic_paid_traffic": get_breakdown_rankings("organic_paid_traffic"),
-        "transaction_types": get_breakdown_rankings("transaction_type")
+        "countries": grouped.get("country", []),
+        "cities": grouped.get("city", []),
+        "traffic_sources": grouped.get("traffic_source", []),
+        "playlists": grouped.get("playlist", []),
+        "devices": grouped.get("device_type", []),
+        "operating_systems": grouped.get("operating_system", []),
+        "revenue_sources": grouped.get("revenue_source", []),
+        "ad_types": grouped.get("ad_type", []),
+        "viewer_ages": grouped.get("viewer_age", []),
+        "viewer_genders": grouped.get("viewer_gender", []),
+        "new_returning_viewers": grouped.get("new_returning_viewers", []),
+        "subscription_sources": grouped.get("subscription_source", []),
+        "subscription_statuses": grouped.get("subscription_status", []),
+        "youtube_products": grouped.get("youtube_product", []),
+        "end_screen_elements": grouped.get("end_screen_element", []),
+        "end_screen_element_types": grouped.get("end_screen_element_type", []),
+        "cards": grouped.get("card", []),
+        "card_types": grouped.get("card_type", []),
+        "playback_locations": grouped.get("playback_location", []),
+        "player_types": grouped.get("player_type", []),
+        "sharing_services": grouped.get("sharing_service", []),
+        "community_posts": grouped.get("community_post", []),
+        "subtitles_cc": grouped.get("subtitles_cc", []),
+        "video_info_languages": grouped.get("video_info_language", []),
+        "translation_uses": grouped.get("translation_use", []),
+        "organic_paid_traffic": grouped.get("organic_paid_traffic", []),
+        "transaction_types": grouped.get("transaction_type", []),
     }
 
-    return {
+    payload = {
         "summary": build_summary(data),
-
         "top_country": top_item(data["countries"]),
         "top_city": top_item(data["cities"]),
         "top_traffic_source": top_item(data["traffic_sources"]),
@@ -416,10 +494,13 @@ def studio_intelligence():
         "top_viewer_gender": top_item(data["viewer_genders"]),
         "top_community_post": top_item(data["community_posts"]),
         "top_end_screen": top_item(data["end_screen_elements"]),
-
         "rankings": data,
         "insights": build_insights(data),
         "recommendations": build_recommendations(data),
         "leak_warnings": build_leak_warnings(data),
-        "growth_opportunities": build_growth_opportunities(data)
+        "growth_opportunities": build_growth_opportunities(data),
     }
+
+    STUDIO_INTELLIGENCE_CACHE["created_at"] = datetime.now()
+    STUDIO_INTELLIGENCE_CACHE["payload"] = payload
+    return payload

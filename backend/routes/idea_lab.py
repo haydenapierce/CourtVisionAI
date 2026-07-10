@@ -3,10 +3,14 @@ from database.db import (
     create_connection,
     get_saved_videos,
     get_best_channel_rpm,
-    get_best_player_revenue_summary
+    get_best_player_revenue_summary,
+    get_latest_video_sync_info,
+    get_youtube_revenue_status
 )
 from data.player_database import NBA_PLAYERS
 import io
+import json
+import os
 from functools import lru_cache
 from datetime import datetime, timedelta
 
@@ -17,7 +21,72 @@ IDEA_LAB_CACHE = {
     "top_50_payload": None
 }
 
-IDEA_LAB_CACHE_SECONDS = 120
+IDEA_LAB_CACHE_SECONDS = 600
+IDEA_LAB_DISK_CACHE_FILE = os.path.join("database", "idea_lab_top_50_cache.json")
+
+
+def _idea_lab_source_marker():
+    try:
+        video_info = get_latest_video_sync_info() or {}
+    except Exception:
+        video_info = {}
+
+    try:
+        revenue_status = get_youtube_revenue_status() or {}
+    except Exception:
+        revenue_status = {}
+
+    latest_revenue = revenue_status.get("latest_sync") or {}
+
+    if isinstance(latest_revenue, dict):
+        revenue_marker = "|".join([
+            str(latest_revenue.get("synced_at") or ""),
+            str(latest_revenue.get("end_date") or ""),
+            str(latest_revenue.get("video_rows") or ""),
+        ])
+    else:
+        revenue_marker = str(latest_revenue or "")
+
+    return "|".join([
+        str(video_info.get("latest_video_sync") or ""),
+        str(video_info.get("video_count") or ""),
+        str(video_info.get("total_views") or ""),
+        revenue_marker,
+    ])
+
+
+def _load_idea_lab_disk_cache():
+    try:
+        if not os.path.exists(IDEA_LAB_DISK_CACHE_FILE):
+            return None
+
+        with open(IDEA_LAB_DISK_CACHE_FILE, "r", encoding="utf-8") as cache_file:
+            cached = json.load(cache_file)
+
+        if cached.get("source_marker") != _idea_lab_source_marker():
+            return None
+
+        payload = cached.get("payload")
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
+def _save_idea_lab_disk_cache(payload):
+    try:
+        os.makedirs(os.path.dirname(IDEA_LAB_DISK_CACHE_FILE), exist_ok=True)
+        temporary_file = f"{IDEA_LAB_DISK_CACHE_FILE}.tmp"
+
+        with open(temporary_file, "w", encoding="utf-8") as cache_file:
+            json.dump({
+                "source_marker": _idea_lab_source_marker(),
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+                "payload": payload,
+            }, cache_file, ensure_ascii=False)
+
+        os.replace(temporary_file, IDEA_LAB_DISK_CACHE_FILE)
+    except Exception:
+        pass
 
 
 @lru_cache(maxsize=50000)
@@ -1124,9 +1193,17 @@ def top_50():
         except Exception:
             pass
 
+    disk_payload = _load_idea_lab_disk_cache()
+
+    if disk_payload:
+        IDEA_LAB_CACHE["top_50_created_at"] = datetime.now()
+        IDEA_LAB_CACHE["top_50_payload"] = disk_payload
+        return disk_payload
+
     payload = build_top_50_uncached()
     IDEA_LAB_CACHE["top_50_created_at"] = datetime.now()
     IDEA_LAB_CACHE["top_50_payload"] = payload
+    _save_idea_lab_disk_cache(payload)
     return payload
 
 

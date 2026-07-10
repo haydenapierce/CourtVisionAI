@@ -1,8 +1,53 @@
 from fastapi import APIRouter
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import db as database
 
 router = APIRouter()
+
+DEAD_RECOVERY_CACHE = {
+    "created_at": None,
+    "payload": None,
+}
+DEAD_RECOVERY_CACHE_SECONDS = 300
+
+
+def get_video_money_lookup():
+    lookup = {}
+
+    if not hasattr(database, "get_best_video_revenue_entries"):
+        return lookup
+
+    try:
+        entries = database.get_best_video_revenue_entries() or []
+    except Exception:
+        return lookup
+
+    for entry in entries:
+        if str(entry.get("period_type") or "") != "lifetime":
+            continue
+
+        video_id = str(entry.get("video_id") or "").strip()
+        if not video_id:
+            continue
+
+        revenue = safe_float(
+            entry.get("amount")
+            or entry.get("estimated_revenue")
+        )
+        views = safe_int(entry.get("views"))
+        rpm = safe_float(entry.get("rpm"))
+
+        if rpm <= 0 and revenue > 0 and views > 0:
+            rpm = (revenue / views) * 1000
+
+        lookup[video_id] = {
+            "total_revenue": revenue,
+            "average_rpm": rpm,
+            "entries": 1,
+            "source": entry.get("source", "youtube_analytics_api"),
+        }
+
+    return lookup
 
 
 def safe_float(value):
@@ -56,11 +101,16 @@ def get_channel_rpm_safe():
     return 0
 
 
-def get_video_money(video):
+def get_video_money(video, money_lookup=None):
     """
     Uses the best available revenue source.
     Current CourtVision uses YouTube Analytics API revenue first, then old manual data only as a fallback.
     """
+    video_id = str(video.get("video_id") or "").strip()
+
+    if money_lookup is not None and video_id in money_lookup:
+        return money_lookup[video_id]
+
     if hasattr(database, "get_best_revenue_for_video"):
         try:
             money = database.get_best_revenue_for_video(video)
@@ -188,8 +238,8 @@ def classify_recovery(video, money, channel_rpm):
     return "Monitor", "Not a strong recovery or reupload candidate yet."
 
 
-def build_video_row(video, channel_rpm):
-    money = get_video_money(video)
+def build_video_row(video, channel_rpm, money_lookup=None):
+    money = get_video_money(video, money_lookup)
 
     views = safe_int(video.get("views"))
     revenue = safe_float(money.get("total_revenue"))
@@ -244,11 +294,22 @@ def build_video_row(video, channel_rpm):
 
 @router.get("/dead-video-recovery")
 def dead_video_recovery():
+    cached_at = DEAD_RECOVERY_CACHE.get("created_at")
+    cached_payload = DEAD_RECOVERY_CACHE.get("payload")
+
+    if cached_at and cached_payload:
+        try:
+            if datetime.now() - cached_at <= timedelta(seconds=DEAD_RECOVERY_CACHE_SECONDS):
+                return cached_payload
+        except Exception:
+            pass
+
     videos = get_saved_videos_safe()
     channel_rpm = get_channel_rpm_safe()
+    money_lookup = get_video_money_lookup()
 
     rows = [
-        build_video_row(video, channel_rpm)
+        build_video_row(video, channel_rpm, money_lookup)
         for video in videos
     ]
 
@@ -352,7 +413,7 @@ def dead_video_recovery():
     if not recommendations:
         recommendations.append("Keep uploading new videos and revisit this tab after more revenue data is synced.")
 
-    return {
+    payload = {
         "summary": {
             "total_videos_scanned": len(rows),
             "total_recovery_candidates": len(candidates),
@@ -374,3 +435,8 @@ def dead_video_recovery():
         "insights": insights,
         "recommendations": recommendations
     }
+
+
+    DEAD_RECOVERY_CACHE["created_at"] = datetime.now()
+    DEAD_RECOVERY_CACHE["payload"] = payload
+    return payload

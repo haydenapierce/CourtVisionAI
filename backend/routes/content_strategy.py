@@ -52,22 +52,19 @@ def normalize(value):
     )
 
 
+PLAYER_META_LOOKUP = {
+    normalize(player.get("name", "")): player
+    for player in NBA_PLAYERS
+    if normalize(player.get("name", ""))
+}
+
+
 def player_lookup():
-    lookup = {}
-
-    for player in NBA_PLAYERS:
-        name = player.get("name", "")
-        key = normalize(name)
-
-        if key:
-            lookup[key] = player
-
-    return lookup
+    return PLAYER_META_LOOKUP
 
 
 def get_player_meta(player_name):
-    lookup = player_lookup()
-    return lookup.get(normalize(player_name), {})
+    return PLAYER_META_LOOKUP.get(normalize(player_name), {})
 
 
 def era_bucket_from_text(value):

@@ -1,4 +1,5 @@
 import os
+import time
 from dotenv import dotenv_values
 from googleapiclient.discovery import build
 
@@ -39,13 +40,28 @@ def get_youtube_service():
     return _YOUTUBE_SERVICE
 
 
+def _execute_with_retry(request, attempts=3):
+    last_error = None
+
+    for attempt in range(attempts):
+        try:
+            return request.execute()
+        except Exception as error:
+            last_error = error
+            if attempt < attempts - 1:
+                time.sleep(0.6 * (attempt + 1))
+
+    raise last_error
+
+
 def get_channel_stats_by_handle(handle=CHANNEL_HANDLE):
     youtube = get_youtube_service()
 
     response = youtube.channels().list(
         part="statistics,snippet,contentDetails",
         forHandle=handle
-    ).execute()
+    )
+    response = _execute_with_retry(response)
 
     return response
 
@@ -83,7 +99,8 @@ def get_all_channel_videos(handle=CHANNEL_HANDLE):
             playlistId=uploads_playlist_id,
             maxResults=50,
             pageToken=next_page_token
-        ).execute()
+        )
+        response = _execute_with_retry(response)
 
         for item in response.get("items", []):
             snippet = item.get("snippet", {})
@@ -138,7 +155,8 @@ def get_video_stats(video_ids):
         response = youtube.videos().list(
             part="statistics,snippet",
             id=",".join(batch)
-        ).execute()
+        )
+        response = _execute_with_retry(response)
 
         all_items.extend(response.get("items", []))
 

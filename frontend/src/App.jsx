@@ -2,7 +2,7 @@ import "./App.css"
 import { useEffect, useRef, useState } from "react"
 import logo from "./assets/nbatop10-logo.png"
 
-const API = "http://127.0.0.1:8002"
+const API = "http://127.0.0.1:8001"
 
 function parseNumberInput(value) {
   if (value === null || value === undefined || value === "") return 0
@@ -227,6 +227,215 @@ function isBadStrategyIdea(item) {
   )
 }
 
+function normalizePlayerImageName(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/-/g, " ")
+    .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function getBasketballReferenceImageCandidates(playerName) {
+  const cleanName = normalizePlayerImageName(playerName)
+  if (!cleanName) return []
+
+  const manualSlugs = {
+    "kareem abdul jabbar": ["abdulka01"],
+    "shaquille oneal": ["onealsh01"],
+    "shaquille o neal": ["onealsh01"],
+    "hakeem olajuwon": ["olajuha01"],
+    "julius erving": ["ervinju01"],
+    "michael jordan": ["jordami01"],
+    "lebron james": ["jamesle01"],
+    "kobe bryant": ["bryanko01"],
+    "larry bird": ["birdla01"],
+    "magic johnson": ["johnsma02", "johnsma01"],
+    "wilt chamberlain": ["chambwi01"],
+    "bill russell": ["russebi01"],
+    "tim duncan": ["duncati01"],
+    "stephen curry": ["curryst01"],
+    "steph curry": ["curryst01"],
+    "kevin durant": ["duranke01"],
+    "allen iverson": ["iversal01"],
+    "charles barkley": ["barklch01"],
+    "jason kidd": ["kiddja01"],
+    "jack sikma": ["sikmaja01"],
+    "vince carter": ["cartevi01"],
+    "tracy mcgrady": ["mcgratr01"],
+    "dominique wilkins": ["wilkido01"],
+    "david robinson": ["robinda01"],
+    "grant hill": ["hillgr01"],
+    "reggie miller": ["millere01"],
+    "ray allen": ["allenra02", "allenra01"],
+    "dirk nowitzki": ["nowitdi01"],
+    "steve nash": ["nashst01"],
+    "john stockton": ["stockjo01"],
+    "chris paul": ["paulch01"],
+    "dwight howard": ["howardw01"],
+    "yao ming": ["mingya01"],
+    "dikembe mutombo": ["mutomdi01"],
+    "clyde drexler": ["drexlcl01"],
+    "shawn kemp": ["kempsh01"],
+    "pete maravich": ["maravpe01"],
+    "earl monroe": ["monroea01"],
+    "walt frazier": ["fraziwa01"],
+    "bernard king": ["kingbe01"],
+    "elvin hayes": ["hayesel01"],
+    "bob mcadoo": ["mcadobo01"],
+    "gary payton": ["paytoga01"],
+    "pau gasol": ["gasolpa01"],
+    "manu ginobili": ["ginobma01"],
+    "carmelo anthony": ["anthoca01"],
+    "jerry west": ["westje01"],
+    "anthony edwards": ["edwaran01"],
+    "ja morant": ["moranja01"],
+    "nikola jokic": ["jokicni01"],
+    "luka doncic": ["doncilu01"],
+    "victor wembanyama": ["wembavi01"],
+    "damian lillard": ["lillada01"],
+    "kyrie irving": ["irvinky01"],
+    "russell westbrook": ["westbru01"],
+    "dwyane wade": ["wadedw01"],
+    "giannis antetokounmpo": ["antetgi01"],
+    "allen iverson": ["iversal01"]
+  }
+
+  const tokens = cleanName.split(" ").filter(Boolean)
+  const first = tokens[0] || ""
+  const generatedBases = []
+
+  function addBase(lastName, firstName = first) {
+    const last = String(lastName || "").replace(/[^a-z]/g, "")
+    const firstPart = String(firstName || "").replace(/[^a-z]/g, "")
+    if (last.length < 2 || firstPart.length < 1) return
+    generatedBases.push(`${last.slice(0, 5)}${firstPart.slice(0, 2)}`)
+  }
+
+  if (tokens.length >= 2) {
+    addBase(tokens[tokens.length - 1])
+    if (tokens.length >= 3) addBase(tokens[tokens.length - 2])
+    if (tokens.length >= 4) addBase(`${tokens[tokens.length - 2]}${tokens[tokens.length - 1]}`)
+  }
+
+  const bases = [
+    ...(manualSlugs[cleanName] || []),
+    ...generatedBases.flatMap(base => ["01", "02", "03", "04", "05"].map(num => `${base}${num}`))
+  ]
+
+  const uniqueBases = [...new Set(bases.filter(Boolean))]
+
+  return uniqueBases.map(slug =>
+    `https://www.basketball-reference.com/req/202106291/images/players/${slug}.jpg`
+  )
+}
+
+function PlayerWikiImage({ player, fallbackUrl, className = "idea-lab-player-image" }) {
+  const name = String(player?.name || player?.player || "").trim()
+  const cacheKey = `${name.toLowerCase()}::bref_headshot_original_v2`
+  const [imageSources, setImageSources] = useState([])
+  const [imageIndex, setImageIndex] = useState(0)
+  const [resolvedImage, setResolvedImage] = useState("")
+
+  useEffect(() => {
+    let active = true
+
+    if (!name) {
+      setImageSources([])
+      setImageIndex(0)
+      setResolvedImage("")
+      return () => {
+        active = false
+      }
+    }
+
+    window.__courtvisionPlayerImageCache = window.__courtvisionPlayerImageCache || {}
+    const cached = window.__courtvisionPlayerImageCache[cacheKey]
+
+    if (cached !== undefined) {
+      setImageSources(cached ? [cached] : [])
+      setImageIndex(0)
+      setResolvedImage(cached || "")
+      return () => {
+        active = false
+      }
+    }
+
+    const basketballReferenceSources = getBasketballReferenceImageCandidates(name)
+    setImageSources(basketballReferenceSources)
+    setImageIndex(0)
+    setResolvedImage("")
+
+    const slug = encodeURIComponent(name.replace(/\s+/g, "_"))
+
+    fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${slug}`)
+      .then(response => response.ok ? response.json() : null)
+      .then(data => {
+        if (!active) return
+
+        const wikiImage = data?.thumbnail?.source || data?.originalimage?.source || ""
+
+        setImageSources(prev => {
+          const next = [...prev]
+          if (wikiImage && !next.includes(wikiImage)) next.push(wikiImage)
+          return next
+        })
+      })
+      .catch(() => {})
+
+    return () => {
+      active = false
+    }
+  }, [name, cacheKey])
+
+  const currentSource = resolvedImage || imageSources[imageIndex] || fallbackUrl || ""
+
+  function handleImageLoad(event) {
+    const src = event?.currentTarget?.src || currentSource
+    if (!src || src === fallbackUrl) return
+
+    window.__courtvisionPlayerImageCache = window.__courtvisionPlayerImageCache || {}
+    window.__courtvisionPlayerImageCache[cacheKey] = src
+    setResolvedImage(src)
+  }
+
+  function handleImageError() {
+    const nextIndex = imageIndex + 1
+
+    if (nextIndex < imageSources.length) {
+      setImageIndex(nextIndex)
+      return
+    }
+
+    window.__courtvisionPlayerImageCache = window.__courtvisionPlayerImageCache || {}
+    window.__courtvisionPlayerImageCache[cacheKey] = ""
+    setResolvedImage("")
+  }
+
+  if (currentSource) {
+    return (
+      <img
+        src={currentSource}
+        className={className}
+        loading="lazy"
+        onLoad={handleImageLoad}
+        onError={handleImageError}
+        alt={name || "Player"}
+      />
+    )
+  }
+
+  return (
+    <div className={`${className} placeholder`}>
+      <span>{String(name || "?").slice(0, 1)}</span>
+    </div>
+  )
+}
+
 function App() {
   const [tab, setTab] = useState("dashboard")
 
@@ -345,7 +554,38 @@ function App() {
   const [revenueForecast, setRevenueForecast] = useState(null)
   const [strategyData, setStrategyData] = useState(null)
   const [deadRecoveryData, setDeadRecoveryData] = useState(null)
+  const [endScreenData, setEndScreenData] = useState(null)
+  const [endScreenView, setEndScreenView] = useState("plan")
+  const [endScreenChanges, setEndScreenChanges] = useState([])
   const [deadRecoveryExpandedLists, setDeadRecoveryExpandedLists] = useState({})
+  const [communityData, setCommunityData] = useState(null)
+  const [communitySaving, setCommunitySaving] = useState(false)
+  const [communityHistoryExpanded, setCommunityHistoryExpanded] = useState(false)
+  const [communityQuickLogMode, setCommunityQuickLogMode] = useState("poll")
+  const [communityForm, setCommunityForm] = useState({
+    id: "",
+    post_date: "",
+    post_time: "",
+    post_type: "Next Upload Poll",
+    post_text: "",
+    option_a: "",
+    option_b: "",
+    option_c: "",
+    option_d: "",
+    option_e: "",
+    option_a_percent: "",
+    option_b_percent: "",
+    option_c_percent: "",
+    option_d_percent: "",
+    option_e_percent: "",
+    poll_winner: "",
+    trivia_answer: "",
+    linked_video_id: "",
+    linked_video_title: "",
+    likes: "",
+    comments: "",
+    votes: ""
+  })
 
   function isDeadRecoveryListExpanded(key) {
     return !!deadRecoveryExpandedLists[key]
@@ -548,7 +788,15 @@ function App() {
   const [contentStudioSelectedClipId, setContentStudioSelectedClipId] = useState(null)
   const [contentStudioDragClipId, setContentStudioDragClipId] = useState(null)
   const [contentStudioPlayheadSeconds, setContentStudioPlayheadSeconds] = useState(0)
+  const [contentStudioPreviewOutroActive, setContentStudioPreviewOutroActive] = useState(false)
+  const [contentStudioPreviewPlaying, setContentStudioPreviewPlaying] = useState(false)
+  const [contentStudioPreviewConfirmed, setContentStudioPreviewConfirmed] = useState({})
+  const [contentStudioTimelineZoom, setContentStudioTimelineZoom] = useState(12)
+  const [contentStudioTrimHistory, setContentStudioTrimHistory] = useState([])
+  const [contentStudioTrimFuture, setContentStudioTrimFuture] = useState([])
   const contentStudioPreviewRef = useRef(null)
+  const contentStudioTrimFrameRef = useRef(null)
+  const contentStudioAutosaveTimerRef = useRef(null)
   const initialBootStartedRef = useRef(false)
   const initialBootSafeVisualStartedAtRef = useRef(null)
   const initialBootStartedAtRef = useRef(null)
@@ -562,6 +810,7 @@ function App() {
   const initialBootTargetPercentRef = useRef(1)
   const initialBootDisplayPercentRef = useRef(1)
   const initialBootEtaStartedAtRef = useRef(null)
+  const initialBootItemsRef = useRef([])
 
   function loadRevenueData() {
     fetch(`${API}/revenue/summary`)
@@ -611,6 +860,27 @@ function App() {
       .catch(() => {})
   }
 
+  function loadEndScreenData() {
+    fetch(`${API}/end-screen-optimizer`)
+      .then(r => r.json())
+      .then(d => setEndScreenData(d || null))
+      .catch(() => {})
+  }
+
+  function loadCommunityAutomationData() {
+    fetch(`${API}/community-automation`)
+      .then(r => r.json())
+      .then(d => setCommunityData(normalizeCommunityPayload(d || null)))
+      .catch(() => setCommunityData({
+        status: "offline",
+        schedule: [],
+        poll_bank: [],
+        history: [],
+        summary: {},
+        next_post: null
+      }))
+  }
+
   function loadStudioData() {
     fetch(`${API}/studio-breakdowns/types`)
       .then(r => r.json())
@@ -654,13 +924,39 @@ function App() {
 
 
   async function fetchJson(path, options = {}) {
-    const response = await fetch(`${API}${path}`, options)
+    const {
+      timeoutMs = 180000,
+      signal: externalSignal,
+      ...fetchOptions
+    } = options
 
-    if (!response.ok) {
-      throw new Error(`${path} failed with status ${response.status}`)
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+
+    if (externalSignal) {
+      if (externalSignal.aborted) controller.abort()
+      else externalSignal.addEventListener("abort", () => controller.abort(), { once: true })
     }
 
-    return response.json()
+    try {
+      const response = await fetch(`${API}${path}`, {
+        ...fetchOptions,
+        signal: controller.signal
+      })
+
+      if (!response.ok) {
+        throw new Error(`${path} failed with status ${response.status}`)
+      }
+
+      return await response.json()
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        throw new Error(`${path} timed out after ${Math.round(timeoutMs / 1000)} seconds`)
+      }
+      throw error
+    } finally {
+      window.clearTimeout(timeout)
+    }
   }
 
   function softTimeout(promise, milliseconds, fallback = null) {
@@ -710,19 +1006,19 @@ function App() {
     try {
       const saved = Number(window.localStorage.getItem("courtvision_boot_estimate_ms") || 0)
 
-      if (saved >= 8000 && saved <= 300000) {
+      if (saved >= 8000 && saved <= 45000) {
         return saved
       }
     } catch {}
 
     // First-run estimate. This should feel quick, but still gives the
     // percentage enough time to move through the numbers instead of jumping.
-    return 45000
+    return 18000
   }
 
   function saveBootEstimateMs(actualMs) {
     try {
-      const safeActual = Math.min(300000, Math.max(8000, Number(actualMs || 45000)))
+      const safeActual = Math.min(45000, Math.max(8000, Number(actualMs || 18000)))
       const previous = getStoredBootEstimateMs()
 
       // Weighted toward the newest successful startup so it learns quickly.
@@ -734,16 +1030,37 @@ function App() {
 
   function makeInitialBootItems() {
     return [
-      { key: "dashboardSync", label: "Videos, views, subscribers, thumbnails, likes, and comments", status: "waiting", weight: 28 },
-      { key: "revenueSync", label: "YouTube Analytics revenue, views, and RPM", status: "waiting", weight: 28 },
-      { key: "statsData", label: "Dashboard stats", status: "waiting", weight: 7 },
-      { key: "savedVideosData", label: "Saved videos", status: "waiting", weight: 8 },
-      { key: "rankingsData", label: "Player rankings", status: "waiting", weight: 7 },
-      { key: "revenueSummaryData", label: "Revenue summary", status: "waiting", weight: 7 },
-      { key: "youtubeRevenueStatusData", label: "Revenue sync status", status: "waiting", weight: 5 },
-      { key: "channelRevenueData", label: "Channel revenue rows", status: "waiting", weight: 4 },
-      { key: "videoRevenueData", label: "Video revenue rows", status: "waiting", weight: 4 },
-      { key: "playersData", label: "Idea Lab players", status: "waiting", weight: 2 }
+      { key: "backendReady", label: "Backend and database ready", status: "waiting", weight: 3, expected_ms: 1000 },
+      { key: "cachedData", label: "Load saved channel totals", status: "waiting", weight: 3, expected_ms: 1200 },
+
+      { key: "dashboardSync", label: "Refresh YouTube videos and channel statistics", status: "waiting", weight: 24, expected_ms: 30000 },
+      { key: "revenueSync", label: "Refresh YouTube Analytics revenue, views, and RPM", status: "waiting", weight: 24, expected_ms: 45000 },
+
+      { key: "statsData", label: "Load dashboard totals", status: "waiting", weight: 2, expected_ms: 1200 },
+      { key: "savedVideosData", label: "Load synced videos", status: "waiting", weight: 3, expected_ms: 2500 },
+      { key: "rankingsData", label: "Load player rankings", status: "waiting", weight: 3, expected_ms: 2500 },
+      { key: "playersData", label: "Load Idea Lab", status: "waiting", weight: 4, expected_ms: 5000 },
+
+      { key: "revenueSummaryData", label: "Load revenue summary", status: "waiting", weight: 2, expected_ms: 2000 },
+      { key: "youtubeRevenueStatusData", label: "Load Analytics sync status", status: "waiting", weight: 1, expected_ms: 1000 },
+      { key: "channelRevenueData", label: "Load channel revenue periods", status: "waiting", weight: 1, expected_ms: 1200 },
+      { key: "videoRevenueData", label: "Load video revenue periods", status: "waiting", weight: 2, expected_ms: 2500 },
+
+      { key: "channelBrainData", label: "Load Channel Brain", status: "waiting", weight: 3, expected_ms: 4000 },
+      { key: "revenueForecastData", label: "Load Revenue Forecast", status: "waiting", weight: 3, expected_ms: 4000 },
+      { key: "strategyResponseData", label: "Load Strategy Center", status: "waiting", weight: 4, expected_ms: 6000 },
+      { key: "deadRecoveryResponseData", label: "Load Dead Video Recovery", status: "waiting", weight: 4, expected_ms: 6000 },
+      { key: "endScreenData", label: "Load End Screen Optimizer", status: "waiting", weight: 2, expected_ms: 3500 },
+
+      { key: "studioTypesData", label: "Load Studio categories", status: "waiting", weight: 1, expected_ms: 1000 },
+      { key: "studioSummaryData", label: "Load Studio summary", status: "waiting", weight: 1, expected_ms: 1800 },
+      { key: "studioBreakdownsData", label: "Load Studio Breakdowns", status: "waiting", weight: 2, expected_ms: 3000 },
+      { key: "studioIntelligenceData", label: "Load Studio Intelligence", status: "waiting", weight: 3, expected_ms: 5000 },
+
+      { key: "contentStudioStatusData", label: "Load Content Studio status", status: "waiting", weight: 1, expected_ms: 1200 },
+      { key: "videoEditorStatusData", label: "Load Video Editor status", status: "waiting", weight: 1, expected_ms: 1200 },
+      { key: "contentStudioProjectsData", label: "Load Content Studio projects", status: "waiting", weight: 2, expected_ms: 2500 },
+      { key: "communityData", label: "Load Community Automation", status: "waiting", weight: 3, expected_ms: 4000 }
     ]
   }
 
@@ -754,20 +1071,36 @@ function App() {
 
   function updateBootItem(key, status) {
     setInitialBootRequiredItems(prev => {
-      const next = (prev || []).map(item =>
-        item.key === key ? { ...item, status } : item
-      )
+      const completedCount = (prev || []).filter(item => item.status === "done").length
+      const now = Date.now()
+
+      const next = (prev || []).map(item => {
+        if (item.key !== key) return item
+
+        return {
+          ...item,
+          status,
+          started_at: status === "running" ? (item.started_at || now) : item.started_at,
+          completed_at: status === "done" ? now : item.completed_at,
+          completion_order: status === "done"
+            ? (item.completion_order || completedCount + 1)
+            : item.completion_order
+        }
+      })
+
+      initialBootItemsRef.current = next
 
       const totalWeight = next.reduce((sum, item) => sum + Number(item.weight || 0), 0) || 100
       const doneWeight = next
         .filter(item => item.status === "done")
         .reduce((sum, item) => sum + Number(item.weight || 0), 0)
 
-      const targetPercent = Math.min(99, Math.max(1, (doneWeight / totalWeight) * 100))
-      initialBootTargetPercentRef.current = targetPercent
+      initialBootTargetPercentRef.current = doneWeight >= totalWeight
+        ? 100
+        : Math.max(1, (doneWeight / totalWeight) * 100)
 
-      setInitialBootCompletedUnits(Math.round(targetPercent))
-      setInitialBootTotalUnits(100)
+      setInitialBootCompletedUnits(doneWeight)
+      setInitialBootTotalUnits(totalWeight)
 
       return next
     })
@@ -792,49 +1125,101 @@ function App() {
   }
 
   async function loadDataPayloadWithBootTracking() {
-    const requiredFetches = [
-      { key: "statsData", path: "/dashboard/stats", fallback: {} },
-      { key: "savedVideosData", path: "/dashboard/saved-videos", fallback: { saved_videos: [] } },
-      { key: "rankingsData", path: "/dashboard/player-rankings", fallback: { player_rankings: [] } },
-      { key: "revenueSummaryData", path: "/revenue/summary", fallback: { summary: null } },
-      { key: "youtubeRevenueStatusData", path: "/revenue/youtube/status", fallback: { status: null } },
-      { key: "channelRevenueData", path: "/revenue/channel", fallback: { channel_revenue: [] } },
-      { key: "videoRevenueData", path: "/revenue/videos", fallback: { video_revenue: [] } },
-      { key: "playersData", path: "/idea-lab/top-50", fallback: { top_50: [] } }
-    ]
+    const trackedFetch = async (key, label, path, fallback, timeoutMs = 90000) => {
+      updateBootItem(key, "running")
+      setInitialBootStep(label)
 
-    const entries = await Promise.all(
-      requiredFetches.map(async item => {
-        updateBootItem(item.key, "running")
+      try {
+        const value = await fetchJson(path, { timeoutMs })
+        updateBootItem(key, "done")
+        return value
+      } catch (error) {
+        console.error(`Startup request failed: ${path}`, error)
 
-        try {
-          const data = await fetchJson(item.path)
-          updateBootItem(item.key, "done")
-          return [item.key, data]
-        } catch {
-          updateBootItem(item.key, "done")
-          return [item.key, item.fallback]
+        if (fallback !== undefined) {
+          updateBootItem(key, "done")
+          return fallback
         }
-      })
-    )
 
-    const payload = {
-      ...Object.fromEntries(entries),
-      channelBrainData: { channel_brain: null },
-      revenueChecklistData: { checklist: null },
-      revenueForecastData: null,
-      strategyResponseData: null,
-      deadRecoveryResponseData: null,
-      studioTypesData: { types: [] },
-      studioSummaryData: { summary: null },
-      studioBreakdownsData: { studio_breakdowns: [] },
-      studioIntelligenceData: null,
-      contentStudioStatusData: null,
-      videoEditorStatusData: null,
-      contentStudioProjectsData: { projects: [] }
+        throw error
+      }
     }
 
-    return payload
+    // Every tab request starts immediately. The dashboard remains hidden until
+    // every promise below has finished and the final payload has been applied.
+    const [
+      statsData,
+      savedVideosData,
+      rankingsData,
+      playersData,
+      revenueSummaryData,
+      youtubeRevenueStatusData,
+      channelRevenueData,
+      videoRevenueData,
+      channelBrainData,
+      revenueForecastData,
+      strategyResponseData,
+      deadRecoveryResponseData,
+      endScreenData,
+      studioTypesData,
+      studioSummaryData,
+      studioBreakdownsData,
+      studioIntelligenceData,
+      contentStudioStatusData,
+      videoEditorStatusData,
+      contentStudioProjectsData,
+      communityData
+    ] = await Promise.all([
+      trackedFetch("statsData", "Loading dashboard totals...", "/dashboard/stats"),
+      trackedFetch("savedVideosData", "Loading synced videos...", "/dashboard/saved-videos"),
+      trackedFetch("rankingsData", "Loading player rankings...", "/dashboard/player-rankings"),
+      trackedFetch("playersData", "Loading Idea Lab...", "/idea-lab/top-50"),
+
+      trackedFetch("revenueSummaryData", "Loading revenue summary...", "/revenue/summary"),
+      trackedFetch("youtubeRevenueStatusData", "Loading Analytics sync status...", "/revenue/youtube/status"),
+      trackedFetch("channelRevenueData", "Loading channel revenue periods...", "/revenue/channel"),
+      trackedFetch("videoRevenueData", "Loading video revenue periods...", "/revenue/videos"),
+
+      trackedFetch("channelBrainData", "Loading Channel Brain...", "/dashboard/channel-brain", { channel_brain: null }),
+      trackedFetch("revenueForecastData", "Loading Revenue Forecast...", "/revenue-forecast", null),
+      trackedFetch("strategyResponseData", "Loading Strategy Center...", "/strategy-intelligence", null),
+      trackedFetch("deadRecoveryResponseData", "Loading Dead Video Recovery...", "/dead-video-recovery", null),
+      trackedFetch("endScreenData", "Loading End Screen Optimizer...", "/end-screen-optimizer", null),
+
+      trackedFetch("studioTypesData", "Loading Studio categories...", "/studio-breakdowns/types", { types: [] }),
+      trackedFetch("studioSummaryData", "Loading Studio summary...", "/studio-breakdowns/summary", { summary: null }),
+      trackedFetch("studioBreakdownsData", "Loading Studio Breakdowns...", "/studio-breakdowns", { studio_breakdowns: [] }),
+      trackedFetch("studioIntelligenceData", "Loading Studio Intelligence...", "/studio-intelligence", null),
+
+      trackedFetch("contentStudioStatusData", "Loading Content Studio status...", "/content-studio/status", null),
+      trackedFetch("videoEditorStatusData", "Loading Video Editor status...", "/video-editor/status", null),
+      trackedFetch("contentStudioProjectsData", "Loading Content Studio projects...", "/content-studio/projects", { projects: [] }),
+      trackedFetch("communityData", "Loading Community Automation...", "/community-automation", null)
+    ])
+
+    return {
+      statsData,
+      savedVideosData,
+      rankingsData,
+      playersData,
+      revenueSummaryData,
+      youtubeRevenueStatusData,
+      channelRevenueData,
+      videoRevenueData,
+      channelBrainData,
+      revenueForecastData,
+      strategyResponseData,
+      deadRecoveryResponseData,
+      endScreenData,
+      studioTypesData,
+      studioSummaryData,
+      studioBreakdownsData,
+      studioIntelligenceData,
+      contentStudioStatusData,
+      videoEditorStatusData,
+      contentStudioProjectsData,
+      communityData
+    }
   }
 
   async function loadDataPayload() {
@@ -866,15 +1251,14 @@ function App() {
       videoRevenueData,
       youtubeRevenueStatusData,
       revenueForecastData,
-      strategyResponseData,
-      deadRecoveryResponseData,
       studioTypesData,
       studioSummaryData,
       studioBreakdownsData,
       studioIntelligenceData,
       contentStudioStatusData,
       videoEditorStatusData,
-      contentStudioProjectsData
+      contentStudioProjectsData,
+      communityData
     ] = await Promise.all([
       trackedFetch("/dashboard/stats", {}),
       trackedFetch("/dashboard/saved-videos", { saved_videos: [] }),
@@ -889,8 +1273,6 @@ function App() {
       trackedFetch("/revenue/youtube/status", { status: null }),
 
       trackedFetch("/revenue-forecast", null),
-      trackedFetch("/strategy-intelligence", null),
-      trackedFetch("/dead-video-recovery", null),
 
       trackedFetch("/studio-breakdowns/types", { types: [] }),
       trackedFetch("/studio-breakdowns/summary", { summary: null }),
@@ -899,7 +1281,8 @@ function App() {
 
       trackedFetch("/content-studio/status", null),
       trackedFetch("/video-editor/status", null),
-      trackedFetch("/content-studio/projects", { projects: [] })
+      trackedFetch("/content-studio/projects", { projects: [] }),
+      trackedFetch("/community-automation", null)
     ])
 
     return {
@@ -914,15 +1297,76 @@ function App() {
       videoRevenueData,
       youtubeRevenueStatusData,
       revenueForecastData,
-      strategyResponseData,
-      deadRecoveryResponseData,
+      strategyResponseData: null,
+      deadRecoveryResponseData: null,
+      endScreenData: null,
       studioTypesData,
       studioSummaryData,
       studioBreakdownsData,
       studioIntelligenceData,
       contentStudioStatusData,
       videoEditorStatusData,
-      contentStudioProjectsData
+      contentStudioProjectsData,
+      communityData
+    }
+  }
+
+  function normalizeCommunityPayload(payload) {
+    if (!payload) return null
+
+    const schedule = Array.isArray(payload.schedule) ? payload.schedule : []
+    const firstPost =
+      payload.next_post ||
+      payload.summary?.next_recommended_post ||
+      schedule[0] ||
+      null
+
+    const normalizePost = post => {
+      if (!post) return null
+
+      return {
+        ...post,
+        type: post.type || post.post_type || "Poll",
+        title: post.title || post.topic || post.post_type || "Community Post",
+        options: post.options || post.poll_options || [],
+        expected_likes: Number(post.expected_likes || 0),
+        expected_comments: Number(post.expected_comments || 0),
+        expected_votes: Number(post.expected_votes || 0),
+        confidence_percent: Number(post.confidence_percent || post.priority_score || 0),
+        confidence: post.confidence || post.confidence_percent || post.priority_score || 0
+      }
+    }
+
+    const normalizedSchedule = schedule.map(normalizePost).filter(Boolean)
+    const normalizedNext = normalizePost(firstPost)
+
+    const history = Array.isArray(payload.history) ? payload.history : []
+    const learning = payload.learning || {}
+    const summary = payload.summary || {}
+
+    const pollBank = payload.poll_bank || normalizedSchedule.slice(0, 6).map(post => ({
+      type: post.type || "Poll",
+      text: post.post_text || "Which NBA legend should get the next Top 10?",
+      options: post.options || [],
+      reason: post.reason || "Generated from current channel signals."
+    }))
+
+    return {
+      ...payload,
+      next_post: normalizedNext,
+      schedule: normalizedSchedule,
+      poll_bank: pollBank,
+      history,
+      learning,
+      summary: {
+        ...summary,
+        engagement_score: summary.engagement_score ?? summary.community_momentum ?? learning.best_type_score ?? 0,
+        total_posts: summary.total_posts ?? summary.logged_posts ?? history.length,
+        best_type: summary.best_type ?? summary.best_learned_post_type ?? learning.best_post_type ?? "Poll",
+        best_time: summary.best_time ?? summary.best_time_today ?? normalizedNext?.time ?? "7:00 PM",
+        best_topic: summary.best_topic ?? normalizedNext?.topic ?? "Player debates",
+        total_votes: summary.total_votes ?? history.reduce((sum, row) => sum + Number(row.votes || 0), 0)
+      }
     }
   }
 
@@ -930,7 +1374,19 @@ function App() {
     setStats(payload.statsData || {})
     setSavedVideos(payload.savedVideosData?.saved_videos || [])
     setRankings(payload.rankingsData?.player_rankings || [])
-    setPlayers(payload.playersData?.top_50 || [])
+    setPlayers(
+      Array.isArray(payload.playersData) ? payload.playersData :
+      payload.playersData?.top_50 ||
+      payload.playersData?.top_players ||
+      payload.playersData?.best_next_uploads ||
+      payload.playersData?.best_ideas ||
+      payload.playersData?.players ||
+      payload.playersData?.ideas ||
+      payload.playersData?.recommendations ||
+      payload.playersData?.items ||
+      payload.playersData?.data ||
+      []
+    )
 
     setChannelBrain(payload.channelBrainData?.channel_brain || null)
 
@@ -941,8 +1397,18 @@ function App() {
     setYoutubeRevenueStatus(payload.youtubeRevenueStatusData?.status || null)
 
     setRevenueForecast(payload.revenueForecastData || null)
-    setStrategyData(payload.strategyResponseData || null)
-    setDeadRecoveryData(payload.deadRecoveryResponseData || null)
+
+    if (payload.strategyResponseData !== undefined && payload.strategyResponseData !== null) {
+      setStrategyData(payload.strategyResponseData)
+    }
+
+    if (payload.deadRecoveryResponseData !== undefined && payload.deadRecoveryResponseData !== null) {
+      setDeadRecoveryData(payload.deadRecoveryResponseData)
+    }
+
+    if (payload.endScreenData !== undefined && payload.endScreenData !== null) {
+      setEndScreenData(payload.endScreenData)
+    }
 
     setStudioTypes(payload.studioTypesData?.types || [])
     setStudioSummary(payload.studioSummaryData?.summary || null)
@@ -952,6 +1418,10 @@ function App() {
     setContentStudioStatus(payload.contentStudioStatusData || null)
     setVideoEditorStatus(payload.videoEditorStatusData || null)
     setContentStudioProjects(payload.contentStudioProjectsData?.projects || [])
+
+    if (payload.communityData !== undefined && payload.communityData !== null) {
+      setCommunityData(normalizeCommunityPayload(payload.communityData))
+    }
   }
 
   async function waitForLoadedDashboardData() {
@@ -976,10 +1446,45 @@ function App() {
     return payload
   }
 
+  async function loadPriorityTabsPayload() {
+    const trackedFetch = async (path, fallback) => {
+      try {
+        return await fetchJson(path)
+      } catch {
+        return fallback
+      }
+    }
+
+    const [
+      channelBrainData,
+      strategyResponseData,
+      deadRecoveryResponseData,
+      endScreenData
+    ] = await Promise.all([
+      trackedFetch("/dashboard/channel-brain", { channel_brain: null }),
+      trackedFetch("/strategy-intelligence", null),
+      trackedFetch("/dead-video-recovery", null),
+      trackedFetch("/end-screen-optimizer", null)
+    ])
+
+    return {
+      channelBrainData,
+      strategyResponseData,
+      deadRecoveryResponseData,
+      endScreenData
+    }
+  }
+
+  async function loadPriorityTabsFast() {
+    const payload = await loadPriorityTabsPayload()
+    setChannelBrain(payload.channelBrainData?.channel_brain || null)
+    setStrategyData(payload.strategyResponseData || null)
+    setDeadRecoveryData(payload.deadRecoveryResponseData || null)
+    setEndScreenData(payload.endScreenData || null)
+  }
+
   async function runFullAutoSync({ boot = false } = {}) {
     if (autoSyncingAll && !boot) return
-
-    const bootTotalUnits = 100
 
     setAutoSyncingAll(true)
 
@@ -989,54 +1494,73 @@ function App() {
         const bootItems = makeInitialBootItems()
 
         initialBootStartedAtRef.current = bootNow
-        initialBootVisualStartedAtRef.current = bootNow
-        initialBootEtaStartedAtRef.current = bootNow
-        initialBootEstimatedMsRef.current = getStoredBootEstimateMs()
-        initialBootLastRemainingRef.current = null
-        initialBootRealSyncDoneRef.current = false
-        initialBootVisualFinishStartedAtRef.current = null
-        initialBootVisualFinishStartProgressRef.current = 1
-        initialBootTargetProgressRef.current = 1
         initialBootTargetPercentRef.current = 1
         initialBootDisplayPercentRef.current = 1
-        initialBootSafeVisualStartedAtRef.current = bootNow
 
+        initialBootItemsRef.current = bootItems
         setInitialBootRequiredItems(bootItems)
         setInitialBootProgress(1)
         setInitialBootDisplayProgress(1)
-        setInitialBootPhase("video")
-        setInitialBootCompletedUnits(1)
-        setInitialBootTotalUnits(bootTotalUnits)
+        setInitialBootCompletedUnits(0)
+        setInitialBootTotalUnits(100)
         setInitialBootRemainingSeconds(null)
         setInitialBootSyncComplete(false)
         setInitialBootError("")
-        setInitialBootStep("Syncing videos, views, subscribers, thumbnails, likes, and comments...")
+        setInitialBootStep("Connecting to CourtVision AI...")
+
+        updateBootItem("backendReady", "running")
+
+        // The root route only responds after the backend and database are ready.
+        await fetchJson("/", { timeoutMs: 30000 })
+
+        updateBootItem("backendReady", "done")
+        updateBootItem("cachedData", "running")
+        setInitialBootStep("Loading saved CourtVision data...")
+
+        // Keep this phase intentionally lightweight. The old version called
+        // /dashboard/startup-data here, which loaded nearly every tab before
+        // the real sync and then loaded all of it again afterward.
+        const cachedStats = await fetchJson("/dashboard/stats", {
+          timeoutMs: 30000
+        })
+        setStats(cachedStats || {})
+
+        updateBootItem("cachedData", "done")
       }
 
-      if (boot) updateBootItem("dashboardSync", "running")
+      if (boot) {
+        updateBootItem("dashboardSync", "running")
+        setInitialBootStep("Refreshing YouTube videos and channel statistics...")
+      }
 
-      const dashboardSyncResult = await fetchJson("/dashboard/auto-sync", { method: "POST" }).catch(error => ({
-        ok: false,
-        message: error?.message || "Dashboard/video sync failed."
-      }))
+      const dashboardSyncResult = await fetchJson("/dashboard/auto-sync", {
+        method: "POST",
+        timeoutMs: 240000
+      })
 
       if (dashboardSyncResult?.ok === false) {
-        throw new Error(dashboardSyncResult?.message || dashboardSyncResult?.error || "Dashboard/video sync failed.")
+        throw new Error(
+          dashboardSyncResult?.message ||
+          dashboardSyncResult?.error ||
+          "Dashboard/video sync failed."
+        )
       }
 
       if (boot) {
         updateBootItem("dashboardSync", "done")
-        setInitialBootPhase("revenue")
-        setInitialBootStep("Syncing YouTube Analytics revenue, views, and RPM...")
         updateBootItem("revenueSync", "running")
+        setInitialBootStep("Refreshing YouTube Analytics revenue, views, and RPM...")
       }
 
-      const revenueSyncResult = await fetchJson("/revenue/youtube/auto-sync", { method: "POST" }).catch(error => ({
-        ok: false,
-        message: error?.message || "Revenue sync failed."
-      }))
+      const revenueSyncResult = await fetchJson("/revenue/youtube/auto-sync", {
+        method: "POST",
+        timeoutMs: 300000
+      })
 
-      if (revenueSyncResult?.ok === false || revenueSyncResult?.revenue_sync?.ok === false) {
+      if (
+        revenueSyncResult?.ok === false ||
+        revenueSyncResult?.revenue_sync?.ok === false
+      ) {
         throw new Error(
           revenueSyncResult?.message ||
           revenueSyncResult?.revenue_sync?.message ||
@@ -1045,62 +1569,41 @@ function App() {
         )
       }
 
-      if (boot) {
-        updateBootItem("revenueSync", "done")
-        setInitialBootPhase("data")
-        setInitialBootStep("Loading fully synced dashboard and revenue data...")
-      }
+      if (boot) updateBootItem("revenueSync", "done")
 
-      const loadedPayload = boot ? await loadDataPayloadWithBootTracking() : await loadDataPayload()
+      if (boot) setInitialBootStep("Loading all CourtVision tabs in parallel...")
+
+      const loadedPayload = boot
+        ? await loadDataPayloadWithBootTracking()
+        : await loadDataPayload()
+
       applyLoadedData(loadedPayload)
 
       if (boot && !isDashboardDataUsable(loadedPayload)) {
-        throw new Error("CourtVision synced, but required dashboard data came back empty.")
+        throw new Error("Required dashboard data came back empty.")
       }
 
       setLastAutoSync(new Date())
 
       if (boot) {
-        const actualBootMs = Date.now() - (initialBootStartedAtRef.current || Date.now())
-        saveBootEstimateMs(actualBootMs)
-
-        initialBootRealSyncDoneRef.current = true
-        initialBootTargetProgressRef.current = 100
         initialBootTargetPercentRef.current = 100
-
-        setInitialBootError("")
         setInitialBootCompletedUnits(100)
         setInitialBootTotalUnits(100)
         setInitialBootProgress(100)
-        setInitialBootPhase("finishing")
-        setInitialBootStep("Finalizing loaded CourtVision dashboard...")
+        setInitialBootStep("CourtVision AI Ready.")
         setInitialBootSyncComplete(true)
       }
-
-      // Load heavier non-dashboard tabs after the required dashboard data is ready.
-      setTimeout(() => {
-        loadRevenueForecastData()
-        loadStrategyData()
-        loadDeadRecoveryData()
-        loadStudioData()
-        loadContentStudioData()
-      }, 500)
     } catch (error) {
       console.error("CourtVision auto-sync failed:", error)
 
       if (boot) {
-        setInitialBootError(error?.message || "Auto-sync failed. Restart the backend and try again.")
-        setInitialBootPhase("error")
-        setInitialBootStep("CourtVision Sync Needs Attention")
+        setInitialBootError(
+          error?.message ||
+          "CourtVision could not connect to the backend. Make sure backend port 8001 is running."
+        )
+        setInitialBootStep("CourtVision Startup Error")
         setInitialBootRemainingSeconds(0)
         setInitialBootSyncComplete(false)
-
-        // Do not show 100 unless the dashboard can open.
-        const safePercent = Math.min(97, Number(initialBootDisplayPercentRef.current || initialBootDisplayProgress || 1))
-        setInitialBootProgress(safePercent)
-        setInitialBootDisplayProgress(safePercent)
-        setInitialBootCompletedUnits(Math.round(safePercent))
-        setInitialBootTotalUnits(100)
       }
     } finally {
       setAutoSyncingAll(false)
@@ -1111,23 +1614,45 @@ function App() {
     if (!initialBootLoading) return
 
     const progressTimer = setInterval(() => {
+      const items = initialBootItemsRef.current || []
+      const totalWeight = items.reduce((sum, item) => sum + Number(item.weight || 0), 0) || 100
       const now = Date.now()
-      const startedAt = initialBootEtaStartedAtRef.current || initialBootStartedAtRef.current || now
-      const elapsedSeconds = Math.max(1, (now - startedAt) / 1000)
 
-      const target = Math.max(
+      let realDoneWeight = 0
+      let inFlightWeight = 0
+
+      items.forEach(item => {
+        const weight = Number(item.weight || 0)
+
+        if (item.status === "done") {
+          realDoneWeight += weight
+          return
+        }
+
+        if (item.status === "running" && item.started_at) {
+          const elapsed = Math.max(0, now - Number(item.started_at))
+          const expected = Math.max(750, Number(item.expected_ms || 4000))
+
+          // Show smooth progress through the work that is actually running,
+          // but reserve the final 15% of each task until its request completes.
+          const runningFraction = Math.min(0.85, elapsed / expected)
+          inFlightWeight += weight * runningFraction
+        }
+      })
+
+      const calculatedTarget = initialBootSyncComplete
+        ? 100
+        : Math.min(99.2, Math.max(1, ((realDoneWeight + inFlightWeight) / totalWeight) * 100))
+
+      initialBootTargetPercentRef.current = Math.max(
         Number(initialBootTargetPercentRef.current || 1),
-        initialBootSyncComplete || initialBootPhase === "finishing" || initialBootPhase === "complete" ? 100 : 1
+        calculatedTarget
       )
 
-      setInitialBootDisplayProgress(prev => {
-        const current = Number(prev || 1)
+      const target = Number(initialBootTargetPercentRef.current || 1)
 
-        if (initialBootError) {
-          const next = Math.min(97, Math.max(current, Number(initialBootTargetPercentRef.current || current)))
-          initialBootDisplayPercentRef.current = next
-          return next
-        }
+      setInitialBootDisplayProgress(currentValue => {
+        const current = Number(currentValue || 1)
 
         if (target <= current) {
           initialBootDisplayPercentRef.current = current
@@ -1135,50 +1660,33 @@ function App() {
         }
 
         const gap = target - current
-        const step = Math.max(0.05, Math.min(0.85, gap / 14))
-        const next = Math.min(target, current + step)
-
+        const next = Math.min(target, current + Math.max(0.08, Math.min(0.7, gap / 10)))
         initialBootDisplayPercentRef.current = next
         return next
       })
 
-      setInitialBootProgress(prev => {
-        const current = Number(prev || 1)
-        return Math.max(current, Math.min(100, target))
-      })
+      setInitialBootProgress(target)
 
-      const displayPercent = Math.max(1, Number(initialBootDisplayPercentRef.current || initialBootDisplayProgress || 1))
-      const rawCompleted = Math.min(100, Math.max(1, Math.round(displayPercent)))
+      const startedAt = initialBootStartedAtRef.current || now
+      const elapsedSeconds = Math.max(1, (now - startedAt) / 1000)
+      const effectiveCompleted = Math.max(1, realDoneWeight + inFlightWeight)
 
-      setInitialBootCompletedUnits(prev => Math.max(Number(prev || 1), rawCompleted))
-      setInitialBootTotalUnits(100)
-
-      if (initialBootError) {
+      if (initialBootSyncComplete || target >= 100) {
         setInitialBootRemainingSeconds(0)
-        return
+      } else {
+        const secondsPerWeight = elapsedSeconds / effectiveCompleted
+        const estimatedRemaining = Math.ceil(
+          secondsPerWeight * Math.max(0, totalWeight - effectiveCompleted)
+        )
+        setInitialBootRemainingSeconds(Math.max(1, estimatedRemaining))
       }
-
-      if (displayPercent >= 99.9 && initialBootSyncComplete) {
-        setInitialBootRemainingSeconds(0)
-        return
-      }
-
-      const estimatedTotalSeconds = elapsedSeconds / Math.max(0.01, displayPercent / 100)
-      const rawRemaining = Math.max(1, Math.ceil(estimatedTotalSeconds - elapsedSeconds))
-
-      setInitialBootRemainingSeconds(prev => {
-        if (prev === null || prev === undefined) return rawRemaining
-        return Math.min(Number(prev), rawRemaining)
-      })
-    }, 90)
+    }, 100)
 
     return () => clearInterval(progressTimer)
   }, [
     initialBootLoading,
     initialBootError,
-    initialBootSyncComplete,
-    initialBootPhase,
-    initialBootDisplayProgress
+    initialBootSyncComplete
   ])
 
 
@@ -1441,12 +1949,12 @@ function App() {
     }
 
     if (contentStudioProjectType === "solo" && contentStudioFiles.length !== 1) {
-      alert("Solo Highlight projects need exactly 1 MP4 file.")
+      alert("Solo Highlight projects need exactly 1 MP4 file. Use Top 10 Countdown if you want to upload one long source or multiple clips.")
       return
     }
 
-    if (contentStudioProjectType === "top10" && contentStudioFiles.length < 10) {
-      alert("Top 10 projects need at least 10 MP4 files.")
+    if (contentStudioProjectType === "top10" && contentStudioFiles.length < 1) {
+      alert("Top 10 Countdown needs at least 1 MP4 file. You can upload one long source video or multiple individual clips.")
       return
     }
 
@@ -1550,15 +2058,137 @@ function App() {
     })
   }
 
-  function updateContentStudioClip(clipId, updates) {
-    if (!contentStudioActiveProject) return
+  function updateContentStudioClip(clipId, updates, options = {}) {
+    const { recordHistory = false } = options
 
-    setContentStudioActiveProject({
-      ...contentStudioActiveProject,
-      clips: (contentStudioActiveProject.clips || []).map(clip =>
-        clip.clip_id === clipId ? { ...clip, ...updates } : clip
-      )
+    setContentStudioActiveProject(currentProject => {
+      if (!currentProject) return currentProject
+
+      if (recordHistory) {
+        const snapshot = (currentProject.clips || []).map(clip => ({
+          clip_id: clip.clip_id,
+          trim_start: Number(clip.trim_start || 0),
+          trim_end: Number(clip.trim_end || 0),
+          order: Number(clip.order || 0)
+        }))
+        setContentStudioTrimHistory(history => [...history.slice(-39), snapshot])
+        setContentStudioTrimFuture([])
+      }
+
+      const nextProject = {
+        ...currentProject,
+        status: currentProject.status === "approved" ? "edited" : currentProject.status,
+        clips: (currentProject.clips || []).map(clip =>
+          clip.clip_id === clipId ? { ...clip, ...updates } : clip
+        )
+      }
+
+      setContentStudioPreviewConfirmed(prev => ({
+        ...prev,
+        [currentProject.project_id]: false
+      }))
+
+      return nextProject
     })
+  }
+
+  function scheduleContentStudioAutosave(projectOverride = null) {
+    window.clearTimeout(contentStudioAutosaveTimerRef.current)
+
+    contentStudioAutosaveTimerRef.current = window.setTimeout(() => {
+      const project = projectOverride || contentStudioActiveProject
+      if (!project?.project_id) return
+
+      const draft = project.project_type === "top10" ? project.top10_draft : project.solo_draft
+
+      fetch(`${API}/content-studio/project/${project.project_id}/edit`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_name: project.project_name,
+          clips: (project.clips || []).map((clip, index) => ({
+            clip_id: clip.clip_id,
+            order: index + 1,
+            title: clip.title,
+            trim_start: Number(clip.trim_start || 0),
+            trim_end: Number(clip.trim_end || 0),
+            duration_seconds: Number(clip.duration_seconds || 0),
+            selected_for_top10: !!clip.selected_for_top10
+          })),
+          top10_draft: project.project_type === "top10" ? draft : null,
+          solo_draft: project.project_type === "solo" ? draft : null
+        })
+      }).catch(() => {})
+    }, 650)
+  }
+
+  function restoreContentStudioTrimSnapshot(snapshot) {
+    if (!snapshot || !contentStudioActiveProject) return
+
+    const byId = new Map(snapshot.map(item => [item.clip_id, item]))
+
+    setContentStudioActiveProject(project => {
+      if (!project) return project
+      const nextProject = {
+        ...project,
+        clips: (project.clips || []).map(clip => {
+          const saved = byId.get(clip.clip_id)
+          return saved ? {
+            ...clip,
+            trim_start: saved.trim_start,
+            trim_end: saved.trim_end,
+            order: saved.order
+          } : clip
+        })
+      }
+      scheduleContentStudioAutosave(nextProject)
+      return nextProject
+    })
+  }
+
+  function undoContentStudioTrim() {
+    if (!contentStudioTrimHistory.length || !contentStudioActiveProject) return
+
+    const currentSnapshot = (contentStudioActiveProject.clips || []).map(clip => ({
+      clip_id: clip.clip_id,
+      trim_start: Number(clip.trim_start || 0),
+      trim_end: Number(clip.trim_end || 0),
+      order: Number(clip.order || 0)
+    }))
+    const previous = contentStudioTrimHistory[contentStudioTrimHistory.length - 1]
+
+    setContentStudioTrimHistory(history => history.slice(0, -1))
+    setContentStudioTrimFuture(future => [currentSnapshot, ...future].slice(0, 40))
+    restoreContentStudioTrimSnapshot(previous)
+  }
+
+  function redoContentStudioTrim() {
+    if (!contentStudioTrimFuture.length || !contentStudioActiveProject) return
+
+    const currentSnapshot = (contentStudioActiveProject.clips || []).map(clip => ({
+      clip_id: clip.clip_id,
+      trim_start: Number(clip.trim_start || 0),
+      trim_end: Number(clip.trim_end || 0),
+      order: Number(clip.order || 0)
+    }))
+    const next = contentStudioTrimFuture[0]
+
+    setContentStudioTrimHistory(history => [...history.slice(-39), currentSnapshot])
+    setContentStudioTrimFuture(future => future.slice(1))
+    restoreContentStudioTrimSnapshot(next)
+  }
+
+  function resetContentStudioSelectedTrim() {
+    if (!selectedClip) return
+    const duration = getContentStudioClipDuration(selectedClip)
+
+    updateContentStudioClip(
+      selectedClip.clip_id,
+      { trim_start: 0, trim_end: duration },
+      { recordHistory: true }
+    )
+    seekContentStudioSelectedClipRelative(0)
+    window.setTimeout(() => scheduleContentStudioAutosave(), 0)
   }
 
   function reorderContentStudioClips(fromClipId, toClipId) {
@@ -1795,6 +2425,8 @@ function App() {
   function seekContentStudioTimeline(seconds) {
     if (!contentStudioActiveProject) return
 
+    setContentStudioPreviewOutroActive(false)
+
     const clips = getContentStudioSortedClips()
     const totalSeconds = getContentStudioTimelineTotalSeconds()
     const nextTime = clampContentStudioNumber(seconds, 0, totalSeconds)
@@ -1856,12 +2488,77 @@ function App() {
       video.pause()
       video.currentTime = clipTrimEnd
       setContentStudioPlayheadSeconds(Number((clipTimelineStart + (clipTrimEnd - clipTrimStart)).toFixed(2)))
+      setContentStudioPreviewOutroActive(true)
       return
     }
 
     const relativeTime = clampContentStudioNumber(currentTime - clipTrimStart, 0, clipTrimEnd - clipTrimStart)
 
     setContentStudioPlayheadSeconds(Number((clipTimelineStart + relativeTime).toFixed(2)))
+  }
+
+  function getContentStudioTimelineClipWidth(clip) {
+    const effectiveSeconds = getContentStudioEffectiveClipDuration(clip)
+    const pixelsPerSecond = clampContentStudioNumber(contentStudioTimelineZoom, 4, 32)
+
+    return Math.max(56, Math.min(3200, effectiveSeconds * pixelsPerSecond))
+  }
+
+  function getContentStudioPreviewRelativeTime(clip = selectedClip) {
+    if (!clip) return 0
+
+    const timelineStart = getContentStudioClipTimelineStart(clip.clip_id)
+    return clampContentStudioNumber(
+      contentStudioPlayheadSeconds - timelineStart,
+      0,
+      getContentStudioEffectiveClipDuration(clip)
+    )
+  }
+
+  function seekContentStudioSelectedClipRelative(relativeSeconds) {
+    if (!selectedClip || !contentStudioPreviewRef.current) return
+
+    setContentStudioPreviewOutroActive(false)
+
+    const start = Number(selectedClip.trim_start || 0)
+    const duration = getContentStudioEffectiveClipDuration(selectedClip)
+    const relative = clampContentStudioNumber(relativeSeconds, 0, duration)
+    const sourceTime = start + relative
+    const timelineStart = getContentStudioClipTimelineStart(selectedClip.clip_id)
+
+    contentStudioPreviewRef.current.currentTime = sourceTime
+    setContentStudioPlayheadSeconds(Number((timelineStart + relative).toFixed(2)))
+  }
+
+  function playContentStudioPreview() {
+    const video = contentStudioPreviewRef.current
+    if (!video || !selectedClip) return
+
+    setContentStudioPreviewOutroActive(false)
+
+    const start = Number(selectedClip.trim_start || 0)
+    const end = Number(selectedClip.trim_end || 0) > start
+      ? Number(selectedClip.trim_end)
+      : getContentStudioClipDuration(selectedClip)
+
+    if (Number(video.currentTime || 0) < start || Number(video.currentTime || 0) >= end) {
+      video.currentTime = start
+    }
+
+    video.play().catch(() => {})
+  }
+
+  function pauseContentStudioPreview() {
+    contentStudioPreviewRef.current?.pause()
+  }
+
+  function stopContentStudioPreview() {
+    const video = contentStudioPreviewRef.current
+    if (!video || !selectedClip) return
+
+    video.pause()
+    seekContentStudioSelectedClipRelative(0)
+    setContentStudioPreviewPlaying(false)
   }
 
   function startContentStudioTrimDrag(event, clip, side) {
@@ -1871,50 +2568,200 @@ function App() {
     event.stopPropagation()
 
     const startX = event.clientX
-    const clipElement = event.currentTarget.closest(".timeline-clip")
-    const clipWidth = Math.max(160, clipElement?.getBoundingClientRect()?.width || 240)
     const duration = getContentStudioClipDuration(clip)
-
     const originalStart = Number(clip.trim_start || 0)
-    const originalEnd = Number(clip.trim_end || duration || 0) || duration
+    const originalEnd = Number(clip.trim_end || 0) > originalStart
+      ? Number(clip.trim_end)
+      : duration
+    const pixelsPerSecond = clampContentStudioNumber(contentStudioTimelineZoom, 4, 32)
+    const minimumLength = 0.25
+    let latestStart = originalStart
+    let latestEnd = originalEnd
 
-    function onMouseMove(moveEvent) {
-      const deltaX = moveEvent.clientX - startX
-      const deltaSeconds = (deltaX / clipWidth) * duration
+    const historySnapshot = (contentStudioActiveProject.clips || []).map(item => ({
+      clip_id: item.clip_id,
+      trim_start: Number(item.trim_start || 0),
+      trim_end: Number(item.trim_end || 0),
+      order: Number(item.order || 0)
+    }))
+    setContentStudioTrimHistory(history => [...history.slice(-39), historySnapshot])
+    setContentStudioTrimFuture([])
+    setContentStudioPreviewOutroActive(false)
+    document.body.classList.add("editor-resizing")
+
+    function applyLiveTrim(nextStart, nextEnd) {
+      window.cancelAnimationFrame(contentStudioTrimFrameRef.current)
+
+      contentStudioTrimFrameRef.current = window.requestAnimationFrame(() => {
+        setContentStudioActiveProject(project => {
+          if (!project) return project
+
+          return {
+            ...project,
+            status: project.status === "approved" ? "edited" : project.status,
+            clips: (project.clips || []).map(item =>
+              item.clip_id === clip.clip_id
+                ? { ...item, trim_start: nextStart, trim_end: nextEnd }
+                : item
+            )
+          }
+        })
+
+        const video = contentStudioPreviewRef.current
+        if (video) {
+          video.pause()
+          const previewTime = side === "left"
+            ? nextStart
+            : Math.min(Math.max(Number(video.currentTime || nextStart), nextStart), nextEnd)
+          video.currentTime = previewTime
+        }
+
+        const timelineStart = getContentStudioClipTimelineStart(clip.clip_id)
+        const sourceTime = side === "left"
+          ? nextStart
+          : Math.min(Math.max(Number(contentStudioPreviewRef.current?.currentTime || nextStart), nextStart), nextEnd)
+        setContentStudioPlayheadSeconds(
+          Number((timelineStart + Math.max(0, sourceTime - nextStart)).toFixed(2))
+        )
+      })
+    }
+
+    function onPointerMove(moveEvent) {
+      const deltaSeconds = (moveEvent.clientX - startX) / pixelsPerSecond
 
       if (side === "left") {
-        const maxStart = Math.max(0, originalEnd - 0.25)
-        const nextStart = clampContentStudioNumber(originalStart + deltaSeconds, 0, maxStart)
-
-        updateContentStudioClip(clip.clip_id, {
-          trim_start: nextStart
-        })
+        latestStart = clampContentStudioNumber(
+          originalStart + deltaSeconds,
+          0,
+          Math.max(0, originalEnd - minimumLength)
+        )
+      } else {
+        latestEnd = clampContentStudioNumber(
+          originalEnd + deltaSeconds,
+          Math.min(duration, originalStart + minimumLength),
+          duration
+        )
       }
 
-      if (side === "right") {
-        const minEnd = Math.max(0.25, originalStart + 0.25)
-        const nextEnd = clampContentStudioNumber(originalEnd + deltaSeconds, minEnd, duration)
+      applyLiveTrim(latestStart, latestEnd)
+    }
 
-        updateContentStudioClip(clip.clip_id, {
-          trim_end: nextEnd
-        })
+    function finishDrag() {
+      window.removeEventListener("pointermove", onPointerMove)
+      window.removeEventListener("pointerup", finishDrag)
+      window.removeEventListener("pointercancel", finishDrag)
+      document.body.classList.remove("editor-resizing")
+      window.cancelAnimationFrame(contentStudioTrimFrameRef.current)
+
+      setContentStudioActiveProject(project => {
+        if (!project) return project
+        const nextProject = {
+          ...project,
+          clips: (project.clips || []).map(item =>
+            item.clip_id === clip.clip_id
+              ? { ...item, trim_start: latestStart, trim_end: latestEnd }
+              : item
+          )
+        }
+        scheduleContentStudioAutosave(nextProject)
+        return nextProject
+      })
+    }
+
+    window.addEventListener("pointermove", onPointerMove)
+    window.addEventListener("pointerup", finishDrag)
+    window.addEventListener("pointercancel", finishDrag)
+  }
+
+  useEffect(() => {
+    function handleEditorKeyboard(event) {
+      if (!contentStudioActiveProject || tab !== "contentStudio") return
+
+      const tag = String(event.target?.tagName || "").toLowerCase()
+      if (["input", "textarea", "select"].includes(tag)) return
+
+      if (event.code === "Space") {
+        event.preventDefault()
+        if (contentStudioPreviewPlaying) pauseContentStudioPreview()
+        else playContentStudioPreview()
+      }
+
+      const activeKeyboardClip = (contentStudioActiveProject.clips || []).find(
+        clip => clip.clip_id === contentStudioSelectedClipId
+      ) || (contentStudioActiveProject.clips || [])[0]
+
+      if (event.key === "ArrowLeft" && activeKeyboardClip) {
+        event.preventDefault()
+        seekContentStudioSelectedClipRelative(
+          getContentStudioPreviewRelativeTime(activeKeyboardClip) - (event.shiftKey ? 1 : 1 / 30)
+        )
+      }
+
+      if (event.key === "ArrowRight" && activeKeyboardClip) {
+        event.preventDefault()
+        seekContentStudioSelectedClipRelative(
+          getContentStudioPreviewRelativeTime(activeKeyboardClip) + (event.shiftKey ? 1 : 1 / 30)
+        )
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault()
+        if (event.shiftKey) redoContentStudioTrim()
+        else undoContentStudioTrim()
       }
     }
 
-    function onMouseUp() {
-      window.removeEventListener("mousemove", onMouseMove)
-      window.removeEventListener("mouseup", onMouseUp)
+    window.addEventListener("keydown", handleEditorKeyboard)
+    return () => window.removeEventListener("keydown", handleEditorKeyboard)
+  }, [
+    tab,
+    contentStudioActiveProject,
+    contentStudioPreviewPlaying,
+    contentStudioSelectedClipId,
+    contentStudioPlayheadSeconds,
+    contentStudioTrimHistory,
+    contentStudioTrimFuture
+  ])
+
+  function isContentStudioPreviewConfirmed(project = contentStudioActiveProject) {
+    if (!project?.project_id) return false
+    return !!contentStudioPreviewConfirmed[project.project_id] || !!project.preview_confirmed
+  }
+
+  function confirmContentStudioPreview() {
+    if (!contentStudioActiveProject?.project_id) return
+
+    if (!contentStudioActiveProject?.rendered_video?.preview_url) {
+      alert("Render the final MP4 first, then confirm the preview.")
+      return
     }
 
-    window.addEventListener("mousemove", onMouseMove)
-    window.addEventListener("mouseup", onMouseUp)
+    fetch(`${API}/content-studio/project/${contentStudioActiveProject.project_id}/confirm-preview`, {
+      method: "PUT"
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (!data.confirmed) {
+          alert(data.message || "Preview could not be confirmed yet.")
+          return
+        }
+
+        setContentStudioActiveProject(data.project || contentStudioActiveProject)
+        setContentStudioPreviewConfirmed(prev => ({
+          ...prev,
+          [contentStudioActiveProject.project_id]: true
+        }))
+        loadContentStudioData()
+        alert("Preview confirmed. YouTube draft fields and upload step are now unlocked for this project.")
+      })
+      .catch(err => alert("Preview confirmation failed: " + err.message))
   }
 
   function renderContentStudioProject() {
     if (!contentStudioActiveProject) return
 
     const proceed = confirm(
-      "Render this project now? This will save your current timeline edits first, then create the final MP4 with the correct template."
+      "Render this project now? This saves your timeline first, then builds the final MP4 with 0.1 second fades, bottom-left countdown overlays for Top 10, and your outro PNG."
     )
 
     if (!proceed) return
@@ -1976,7 +2823,107 @@ function App() {
   }
 
 
-  function syncYouTubeRevenue(syncType = "daily") {
+  
+  function autoDetectContentStudioClips() {
+    if (!contentStudioActiveProject?.project_id) {
+      alert("Open a Content Studio project first.")
+      return
+    }
+
+    const proceed = confirm(
+      "Create 10 rough editable clip slots from your long source video? You can still trim, rename, delete, and drag them into final order after."
+    )
+
+    if (!proceed) return
+
+    fetch(`${API}/content-studio/project/${contentStudioActiveProject.project_id}/auto-detect-clips`, {
+      method: "POST"
+    })
+      .then(async r => {
+        const data = await r.json()
+
+        if (!r.ok || data.ok === false) {
+          alert("Clip detection failed: " + JSON.stringify(data.message || data))
+          return
+        }
+
+        setContentStudioActiveProject(data.project || contentStudioActiveProject)
+        setContentStudioSelectedClipId(data.project?.clips?.[0]?.clip_id || contentStudioSelectedClipId)
+        setContentStudioPlayheadSeconds(0)
+        loadContentStudioData()
+        alert("10 rough clip slots created. Now trim each dunk exactly and drag them into your Top 10 order.")
+      })
+      .catch(err => alert("Clip detection failed: " + err.message))
+  }
+
+  function renderContentStudioSolos() {
+    if (!contentStudioActiveProject?.project_id) {
+      alert("Open a Content Studio project first.")
+      return
+    }
+
+    const proceed = confirm(
+      "Export every clip as its own solo highlight with 0.1 second fades and your outro PNG?"
+    )
+
+    if (!proceed) return
+
+    const draft = getContentStudioDraft()
+
+    fetch(`${API}/content-studio/project/${contentStudioActiveProject.project_id}/edit`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project_name: contentStudioActiveProject.project_name,
+        clips: (contentStudioActiveProject.clips || []).map((clip, index) => ({
+          clip_id: clip.clip_id,
+          order: index + 1,
+          title: clip.title,
+          trim_start: Number(clip.trim_start || 0),
+          trim_end: Number(clip.trim_end || 0),
+          duration_seconds: Number(clip.duration_seconds || 0),
+          selected_for_top10: !!clip.selected_for_top10
+        })),
+        top10_draft: contentStudioActiveProject.project_type === "top10" ? draft : null,
+        solo_draft: contentStudioActiveProject.project_type === "solo" ? draft : null
+      })
+    })
+      .then(async saveResponse => {
+        const savedData = await saveResponse.json()
+
+        if (!saveResponse.ok || savedData.found === false) {
+          alert("Project save before solo export failed: " + JSON.stringify(savedData))
+          return null
+        }
+
+        setContentStudioActiveProject({
+          ...savedData.project,
+          solo_export_status: "exporting"
+        })
+
+        return fetch(`${API}/content-studio/project/${contentStudioActiveProject.project_id}/render-solos`, {
+          method: "POST"
+        })
+      })
+      .then(async exportResponse => {
+        if (!exportResponse) return
+
+        const exportData = await exportResponse.json()
+
+        if (!exportResponse.ok || exportData.ok === false) {
+          setContentStudioActiveProject(exportData.project || contentStudioActiveProject)
+          alert("Solo export failed: " + JSON.stringify(exportData.message || exportData.result || exportData))
+          return
+        }
+
+        setContentStudioActiveProject(exportData.project)
+        loadContentStudioData()
+        alert(`Solo export finished. ${exportData.solo_exports?.filter(item => item.ok).length || 0} clips are ready.`)
+      })
+      .catch(err => alert("Solo export failed: " + err.message))
+  }
+
+function syncYouTubeRevenue(syncType = "daily") {
     const isFull = syncType === "full"
 
     if (isFull) {
@@ -2034,6 +2981,150 @@ function App() {
       .then(r => r.json())
       .then(d => setThumbnailAnalysis(d.analysis))
       .catch(() => {})
+  }
+
+  function updateCommunityForm(field, value) {
+    setCommunityForm(prev => ({
+      ...prev,
+      [field]: value
+    }))
+  }
+
+  function resetCommunityForm() {
+    setCommunityForm({
+      id: "",
+      post_date: "",
+      post_time: "",
+      post_type: "Next Upload Poll",
+      post_text: "",
+      option_a: "",
+      option_b: "",
+      option_c: "",
+      option_d: "",
+      option_e: "",
+      option_a_percent: "",
+      option_b_percent: "",
+      option_c_percent: "",
+      option_d_percent: "",
+      option_e_percent: "",
+      poll_winner: "",
+      trivia_answer: "",
+      linked_video_id: "",
+      linked_video_title: "",
+      likes: "",
+      comments: "",
+      votes: ""
+    })
+  }
+
+  function useCommunitySuggestion(post) {
+    if (!post) return
+
+    setCommunityForm(prev => ({
+      ...prev,
+      id: "",
+      post_date: post.date || prev.post_date,
+      post_time: post.time || prev.post_time,
+      post_type: post.type || post.post_type || prev.post_type,
+      post_text: post.post_text || prev.post_text,
+      option_a: post.options?.[0] || "",
+      option_b: post.options?.[1] || "",
+      option_c: post.options?.[2] || "",
+      option_d: post.options?.[3] || "",
+      option_e: post.options?.[4] || "",
+      option_a_percent: "",
+      option_b_percent: "",
+      option_c_percent: "",
+      option_d_percent: "",
+      option_e_percent: "",
+      poll_winner: "",
+      trivia_answer: "",
+      linked_video_id: post.linked_video_id || post.linked_video?.video_id || prev.linked_video_id,
+      linked_video_title: post.linked_video_title || post.linked_video?.title || prev.linked_video_title
+    }))
+  }
+
+  function editCommunityEntry(entry) {
+    if (!entry) return
+
+    setCommunityForm({
+      id: entry.id || "",
+      post_date: entry.post_date || "",
+      post_time: entry.post_time || "",
+      post_type: entry.post_type || "Next Upload Poll",
+      post_text: entry.post_text || "",
+      option_a: entry.option_a || entry.poll_option_1 || "",
+      option_b: entry.option_b || entry.poll_option_2 || "",
+      option_c: entry.option_c || entry.poll_option_3 || "",
+      option_d: entry.option_d || entry.poll_option_4 || "",
+      option_e: entry.option_e || entry.poll_option_5 || "",
+      option_a_percent: entry.option_a_percent || "",
+      option_b_percent: entry.option_b_percent || "",
+      option_c_percent: entry.option_c_percent || "",
+      option_d_percent: entry.option_d_percent || "",
+      option_e_percent: entry.option_e_percent || "",
+      poll_winner: entry.poll_winner || entry.topic || "",
+      trivia_answer: entry.trivia_answer || "",
+      linked_video_id: entry.linked_video_id || "",
+      linked_video_title: entry.linked_video_title || "",
+      likes: entry.likes || "",
+      comments: entry.comments || "",
+      votes: entry.votes || ""
+    })
+    setTab("communityAutomation")
+  }
+
+  async function submitCommunityResult(event) {
+    event.preventDefault()
+    setCommunitySaving(true)
+
+    const payload = {
+      id: parseNumberInput(communityForm.id),
+      post_date: communityForm.post_date || "",
+      post_time: communityForm.post_time || "",
+      post_type: communityForm.post_type || "Next Upload Poll",
+      topic: communityForm.poll_winner || communityForm.trivia_answer || "",
+      linked_video_id: communityForm.linked_video_id || "",
+      linked_video_title: communityForm.linked_video_title || "",
+      post_text: communityForm.post_text || "",
+      poll_option_1: communityForm.option_a || "",
+      poll_option_2: communityForm.option_b || "",
+      poll_option_3: communityForm.option_c || "",
+      poll_option_4: communityForm.option_d || "",
+      poll_option_5: communityForm.option_e || "",
+      option_a: communityForm.option_a || "",
+      option_b: communityForm.option_b || "",
+      option_c: communityForm.option_c || "",
+      option_d: communityForm.option_d || "",
+      option_e: communityForm.option_e || "",
+      option_a_percent: parseNumberInput(communityForm.option_a_percent),
+      option_b_percent: parseNumberInput(communityForm.option_b_percent),
+      option_c_percent: parseNumberInput(communityForm.option_c_percent),
+      option_d_percent: parseNumberInput(communityForm.option_d_percent),
+      option_e_percent: parseNumberInput(communityForm.option_e_percent),
+      poll_winner: communityForm.poll_winner || "",
+      trivia_answer: communityForm.trivia_answer || "",
+      likes: parseNumberInput(communityForm.likes),
+      comments: parseNumberInput(communityForm.comments),
+      votes: parseNumberInput(communityForm.votes)
+    }
+
+    try {
+      const response = await fetch(`${API}/community-automation/log`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      })
+
+      if (!response.ok) throw new Error("Community result save failed")
+
+      resetCommunityForm()
+      loadCommunityAutomationData()
+    } catch (error) {
+      alert(error.message || "Community result save failed")
+    } finally {
+      setCommunitySaving(false)
+    }
   }
 
   function riskColor(risk) {
@@ -2121,6 +3212,88 @@ function App() {
   const syncedVideoPercent = stats.video_count
     ? Math.min(100, Math.round((savedVideos.length / Number(stats.video_count || 1)) * 100))
     : 0
+
+  const endScreenRows = endScreenData?.all_optimizations || []
+
+  function ideaPlayerThumbnail(player) {
+    const name = String(player?.name || player?.player || "").toLowerCase()
+    if (!name) return ""
+
+    const exact = savedVideos.find(video =>
+      String(video?.player_name || "").toLowerCase() === name && video?.thumbnail
+    )
+
+    if (exact?.thumbnail) return exact.thumbnail
+
+    const titleMatch = savedVideos.find(video =>
+      String(video?.title || "").toLowerCase().includes(name) && video?.thumbnail
+    )
+
+    return titleMatch?.thumbnail || ""
+  }
+
+  useEffect(() => {
+    if (tab === "communityAutomation" && !communityData) {
+      loadCommunityAutomationData()
+    }
+  }, [tab, communityData])
+
+  useEffect(() => {
+    if (!endScreenData?.all_optimizations?.length) return
+
+    const current = {}
+
+    endScreenData.all_optimizations.forEach(item => {
+      const source = item.source_video || {}
+      if (!source.video_id) return
+
+      current[source.video_id] = {
+        title: source.title || "Untitled Video",
+        rec1: item.recommendations?.[0]?.video_id || "",
+        rec1Title: item.recommendations?.[0]?.title || "",
+        rec2: item.recommendations?.[1]?.video_id || "",
+        rec2Title: item.recommendations?.[1]?.title || "",
+        revenue: Number(item.estimated_extra_revenue || 0),
+        views: Number(item.estimated_extra_views || 0)
+      }
+    })
+
+    try {
+      const previous = JSON.parse(window.localStorage.getItem("courtvision_end_screen_last_plan") || "{}")
+      const changes = []
+
+      Object.entries(current).forEach(([videoId, now]) => {
+        const before = previous[videoId]
+        if (!before) return
+
+        const changedFirst = before.rec1 && before.rec1 !== now.rec1
+        const changedSecond = before.rec2 && before.rec2 !== now.rec2
+
+        if (changedFirst || changedSecond) {
+          changes.push({
+            video_id: videoId,
+            title: now.title,
+            previous_first: before.rec1Title || "—",
+            current_first: now.rec1Title || "—",
+            previous_second: before.rec2Title || "—",
+            current_second: now.rec2Title || "—",
+            estimated_extra_revenue: now.revenue,
+            estimated_extra_views: now.views,
+            changed_first: changedFirst,
+            changed_second: changedSecond,
+            reason: now.revenue > Number(before.revenue || 0)
+              ? "New recommendation has stronger projected revenue after the latest sync."
+              : "Latest synced views, RPM, or revenue changed the best end-screen path."
+          })
+        }
+      })
+
+      setEndScreenChanges(changes)
+      window.localStorage.setItem("courtvision_end_screen_last_plan", JSON.stringify(current))
+    } catch {
+      window.localStorage.setItem("courtvision_end_screen_last_plan", JSON.stringify(current))
+    }
+  }, [endScreenData])
 
   const bestMoneyPlayer = rankings[0]
   const bestPlayerRevenueValue = Number(
@@ -2498,6 +3671,70 @@ function App() {
               </span>
             </div>
 
+            <div
+              style={{
+                marginTop: "14px",
+                maxHeight: "150px",
+                overflowY: "auto",
+                border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: "14px",
+                background: "rgba(255,255,255,0.045)",
+                padding: "10px",
+                textAlign: "left"
+              }}
+            >
+              {[...(initialBootRequiredItems || [])]
+                .sort((a, b) => {
+                  const statusOrder = { done: 0, running: 1, waiting: 2 }
+                  const aStatus = statusOrder[a.status] ?? 3
+                  const bStatus = statusOrder[b.status] ?? 3
+
+                  if (aStatus !== bStatus) return aStatus - bStatus
+
+                  if (a.status === "done" && b.status === "done") {
+                    return Number(a.completion_order || 999) - Number(b.completion_order || 999)
+                  }
+
+                  return 0
+                })
+                .map(item => (
+                <div
+                  key={item.key}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(0, 1fr) auto",
+                    gap: "10px",
+                    alignItems: "center",
+                    padding: "6px 0",
+                    borderBottom: "1px solid rgba(255,255,255,0.06)",
+                    color: item.status === "done"
+                      ? "rgba(255,255,255,0.48)"
+                      : item.status === "running"
+                        ? "rgba(255,255,255,0.95)"
+                        : "rgba(255,255,255,0.62)",
+                    fontSize: "12px",
+                    lineHeight: 1.25
+                  }}
+                >
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {item.label}
+                  </span>
+                  <b style={{
+                    color: item.status === "done"
+                      ? "#4ade80"
+                      : item.status === "running"
+                        ? "#facc15"
+                        : "rgba(255,255,255,0.46)",
+                    textTransform: "uppercase",
+                    fontSize: "10px",
+                    letterSpacing: "0.08em"
+                  }}>
+                    {item.status}
+                  </b>
+                </div>
+              ))}
+            </div>
+
             <small style={{ display: "block", marginTop: "16px", color: "rgba(255,255,255,0.5)" }}>
               {initialBootPhase === "video" ? "Syncing channel videos and public stats..." :
                 initialBootPhase === "revenue" ? "Syncing YouTube Analytics revenue and RPM..." :
@@ -2540,6 +3777,8 @@ function App() {
         <button className={tab === "revenue" ? "active-tab" : ""} onClick={() => setTab("revenue")}>Revenue Tracker</button>
         <button className={tab === "revenueForecast" ? "active-tab" : ""} onClick={() => setTab("revenueForecast")}>Revenue Forecast</button>
         <button className={tab === "deadRecovery" ? "active-tab" : ""} onClick={() => setTab("deadRecovery")}>Dead Video Recovery</button>
+        <button className={tab === "endScreenOptimizer" ? "active-tab" : ""} onClick={() => setTab("endScreenOptimizer")}>End Screen Optimizer</button>
+        <button className={tab === "communityAutomation" ? "active-tab" : ""} onClick={() => setTab("communityAutomation")}>Community Automation</button>
         <button className={tab === "ideas" ? "active-tab" : ""} onClick={() => setTab("ideas")}>Idea Lab</button>
         <button className={tab === "predictor" ? "active-tab" : ""} onClick={() => setTab("predictor")}>Player Predictor</button>
         <button className={tab === "thumbnail" ? "active-tab" : ""} onClick={() => setTab("thumbnail")}>Thumbnail Analyzer</button>
@@ -2949,25 +4188,6 @@ function App() {
                   </button>
                 )}
 
-                <div className="ai-brain-panel final-action-panel">
-                  <div className="ai-panel-heading">
-                    <span>Action Plan</span>
-                    <small>next step</small>
-                  </div>
-
-                  <div className="final-action-grid">
-                    {channelBrain?.action_plan?.length > 0 ? (
-                      channelBrain.action_plan.slice(0, 5).map((item, i) => (
-                        <div className="final-action-card" key={i}>
-                          <span>{i + 1}</span>
-                          <p>{item}</p>
-                        </div>
-                      ))
-                    ) : (
-                      <p>No action plan yet.</p>
-                    )}
-                  </div>
-                </div>
               </>
             )}
           </div>
@@ -2975,39 +4195,6 @@ function App() {
 
         {tab === "revenue" && (
           <div className="card big revenue-clean-tracker revenue-tracker-perfect">
-            <div className="revenue-hero-card">
-              <div className="revenue-hero-copy">
-                <span className="editor-kicker">YouTube Analytics API</span>
-                <h2>Revenue Tracker</h2>
-                <p>
-                  Auto-synced YouTube Studio estimated revenue and RPM. Rolling periods use the last completed day so the totals stay close to Studio.
-                </p>
-              </div>
-
-              <div className="revenue-sync-mini-panel">
-                <div className="revenue-sync-mini-grid">
-                  <div>
-                    <span>Last Sync</span>
-                    <b>{youtubeRevenueStatus?.latest_sync?.synced_at ? formatDateTime(youtubeRevenueStatus.latest_sync.synced_at) : "Not synced yet"}</b>
-                  </div>
-
-                  <div>
-                    <span>Data Range</span>
-                    <b>
-                      {formatDateFull(youtubeRevenueStatus?.first_analytics_date)}
-                      {" → "}
-                      {formatDateFull(youtubeRevenueStatus?.last_analytics_date)}
-                    </b>
-                  </div>
-
-                  <div>
-                    <span>Synced Rows</span>
-                    <b>{(youtubeRevenueStatus?.total_daily_rows || 0).toLocaleString()}</b>
-                  </div>
-                </div>
-              </div>
-            </div>
-
             <div className="revenue-period-tabs">
               {allRevenuePeriods.map(period => (
                 <button
@@ -3109,7 +4296,7 @@ function App() {
                   })}
                 </div>
               ) : (
-                <p>No synced video revenue found for {periodLabel(revenuePeriod)} yet. Run Sync Revenue or Full Backfill.</p>
+                <p>No synced video revenue found for {periodLabel(revenuePeriod)} yet. CourtVision will try again automatically on the next startup sync.</p>
               )}
             </div>
           </div>
@@ -3233,260 +4420,237 @@ function App() {
               <span className="editor-kicker">Dead Video Recovery</span>
               <h2>Dead Video Recovery</h2>
               <p>
-                Finds older or underperforming videos that are worth saving with better titles, thumbnails, playlists, community posts, remakes, or fresh uploads.
+                A clean ranked list of every video by recovery score, using synced Revenue Tracker data, RPM, views, upload age, and remake/reupload upside.
               </p>
             </div>
 
             {!deadRecoveryData ? (
-              <div className="dead-recovery-loading">Loading dead video recovery...</div>
+              <div className="ai-brain-loading">Loading Dead Video Recovery...</div>
             ) : (
-              <>
-                <div className="dead-recovery-metric-grid">
-                  <div className="dead-recovery-metric-card">
-                    <span>Videos Scanned</span>
-                    <b>{deadRecoveryData.summary?.total_videos_scanned || 0}</b>
-                    <small>total channel videos checked</small>
-                  </div>
-
-                  <div className="dead-recovery-metric-card">
-                    <span>Recovery Candidates</span>
-                    <b>{deadRecoveryData.summary?.total_recovery_candidates || 0}</b>
-                    <small>worth improving or refreshing</small>
-                  </div>
-
-                  <div className="dead-recovery-metric-card">
-                    <span>High RPM / Low Reach</span>
-                    <b>{deadRecoveryData.summary?.high_rpm_low_reach || 0}</b>
-                    <small>good money signal, low exposure</small>
-                  </div>
-
-                  <div className="dead-recovery-metric-card">
-                    <span>Revenue Leaks</span>
-                    <b>{deadRecoveryData.summary?.revenue_leaks || 0}</b>
-                    <small>views without strong RPM</small>
-                  </div>
+              <div className="dead-recovery-panel full-recovery-only-panel">
+                <div className="dead-recovery-panel-heading full-recovery-heading">
+                  <span>Full Recovery List</span>
+                  <small>ranked by recovery score</small>
                 </div>
 
-                <div className="dead-recovery-panel">
-                  <div className="dead-recovery-panel-heading">
-                    <span>Recovery Insights</span>
-                    <small>what the scan found</small>
-                  </div>
+                {(() => {
+                  const sortedRecoveryRows = [...(deadRecoveryData.all_scored_videos || [])].sort((a, b) =>
+                    Number(b.recovery_score || 0) - Number(a.recovery_score || 0) ||
+                    Number(b.projected_new_revenue || 0) - Number(a.projected_new_revenue || 0) ||
+                    Number(b.manual_rpm || 0) - Number(a.manual_rpm || 0) ||
+                    Number(b.views || 0) - Number(a.views || 0)
+                  )
+                  const expanded = isDeadRecoveryListExpanded("fullRecoveryList")
+                  const visibleRecoveryRows = expanded ? sortedRecoveryRows : sortedRecoveryRows.slice(0, 50)
 
-                  <div className="dead-recovery-note-list">
-                    {deadRecoveryData.insights?.length > 0 ? (
-                      deadRecoveryData.insights.slice(0, 5).map((insight, i) => (
-                        <p key={i}>• {insight}</p>
-                      ))
-                    ) : (
-                      <p>No recovery insights yet.</p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="dead-recovery-two-col dead-recovery-equal-row">
-                  <div className="dead-recovery-panel">
-                    <div className="dead-recovery-panel-heading">
-                      <span>Top Recovery Candidates</span>
-                      <small>highest overall priority</small>
-                    </div>
-
-                    <div className="dead-recovery-rank-list">
-                      {deadRecoveryData.top_candidates?.length > 0 ? (
-                        deadRecoveryVisibleItems(deadRecoveryData.top_candidates, "topCandidates").map((v, i) => (
-                          <div className="dead-recovery-rank-row" key={i}>
-                            <div>
-                              <b>#{i + 1} {v.title}</b>
-                              <small>{v.recovery_category || "Recovery Candidate"} • {(v.views || 0).toLocaleString()} views</small>
-                            </div>
-                            <strong>{v.recovery_score || 0}</strong>
-                          </div>
-                        ))
-                      ) : (
-                        <p>No recovery candidates yet.</p>
-                      )}
-                    </div>
-
-                    {deadRecoveryData.top_candidates?.length > 5 && (
-                      <button className="dead-recovery-show-more" onClick={() => toggleDeadRecoveryList("topCandidates")}>
-                        {isDeadRecoveryListExpanded("topCandidates") ? "Show Less" : "Show More"}
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="dead-recovery-panel">
-                    <div className="dead-recovery-panel-heading">
-                      <span>High RPM / Low Reach</span>
-                      <small>fix title or thumbnail first</small>
-                    </div>
-
-                    <div className="dead-recovery-rank-list">
-                      {deadRecoveryData.high_rpm_low_reach?.length > 0 ? (
-                        deadRecoveryVisibleItems(deadRecoveryData.high_rpm_low_reach, "highRpmLowReach").map((v, i) => (
-                          <div className="dead-recovery-rank-row" key={i}>
-                            <div>
-                              <b>#{i + 1} {v.title}</b>
-                              <small>{v.player || "Unknown"} • {(v.views || 0).toLocaleString()} views</small>
-                            </div>
-                            <strong>{formatMoney(v.manual_rpm || 0)} RPM</strong>
-                          </div>
-                        ))
-                      ) : (
-                        <p>No high-RPM low-reach videos yet.</p>
-                      )}
-                    </div>
-
-                    {deadRecoveryData.high_rpm_low_reach?.length > 5 && (
-                      <button className="dead-recovery-show-more" onClick={() => toggleDeadRecoveryList("highRpmLowReach")}>
-                        {isDeadRecoveryListExpanded("highRpmLowReach") ? "Show Less" : "Show More"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="dead-recovery-two-col dead-recovery-equal-row">
-                  <div className="dead-recovery-panel">
-                    <div className="dead-recovery-panel-heading">
-                      <span>Remake / Reupload Candidates</span>
-                      <small>fresh version may work better</small>
-                    </div>
-
-                    <div className="dead-recovery-rank-list">
-                      {[...(deadRecoveryData.remake_candidates || []), ...(deadRecoveryData.reupload_candidates || [])].length > 0 ? (
-                        deadRecoveryVisibleItems([...(deadRecoveryData.remake_candidates || []), ...(deadRecoveryData.reupload_candidates || [])], "remakeReupload").map((v, i) => (
-                          <div className="dead-recovery-rank-row" key={i}>
-                            <div>
-                              <b>#{i + 1} {v.title}</b>
-                              <small>{v.recovery_category || "Remake Candidate"} • {v.age_days || 0} days old</small>
-                            </div>
-                            <strong>{formatMoney(v.manual_revenue || 0)}</strong>
-                          </div>
-                        ))
-                      ) : (
-                        <p>No remake or reupload candidates yet.</p>
-                      )}
-                    </div>
-
-                    {[...(deadRecoveryData.remake_candidates || []), ...(deadRecoveryData.reupload_candidates || [])].length > 5 && (
-                      <button className="dead-recovery-show-more" onClick={() => toggleDeadRecoveryList("remakeReupload")}>
-                        {isDeadRecoveryListExpanded("remakeReupload") ? "Show Less" : "Show More"}
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="dead-recovery-panel">
-                    <div className="dead-recovery-panel-heading">
-                      <span>Revenue Leaks</span>
-                      <small>views with weak monetization</small>
-                    </div>
-
-                    <div className="dead-recovery-rank-list">
-                      {deadRecoveryData.revenue_leaks?.length > 0 ? (
-                        deadRecoveryVisibleItems(deadRecoveryData.revenue_leaks, "revenueLeaks").map((v, i) => (
-                          <div className="dead-recovery-rank-row" key={i}>
-                            <div>
-                              <b>#{i + 1} {v.title}</b>
-                              <small>{(v.views || 0).toLocaleString()} views • {formatMoney(v.manual_rpm || 0)} RPM</small>
-                            </div>
-                            <strong>{formatMoney(v.manual_revenue || 0)}</strong>
-                          </div>
-                        ))
-                      ) : (
-                        <p>No major revenue leaks yet.</p>
-                      )}
-                    </div>
-
-                    {deadRecoveryData.revenue_leaks?.length > 5 && (
-                      <button className="dead-recovery-show-more" onClick={() => toggleDeadRecoveryList("revenueLeaks")}>
-                        {isDeadRecoveryListExpanded("revenueLeaks") ? "Show Less" : "Show More"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="dead-recovery-panel">
-                  <div className="dead-recovery-panel-heading">
-                    <span>Recommended Fixes</span>
-                    <small>next step</small>
-                  </div>
-
-                  <div className="dead-recovery-action-list">
-                    {deadRecoveryData.recommendations?.length > 0 ? (
-                      deadRecoveryData.recommendations.slice(0, 6).map((step, i) => (
-                        <div className="dead-recovery-action-step" key={i}>
-                          <span>{i + 1}</span>
-                          <p>{step}</p>
-                        </div>
-                      ))
-                    ) : (
-                      <p>No recovery recommendations yet.</p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="dead-recovery-panel dead-recovery-video-panel">
-                  <div className="dead-recovery-panel-heading">
-                    <span>Full Recovery List</span>
-                    <small>ranked by recovery score</small>
-                  </div>
-
-                  {deadRecoveryData.top_candidates?.length > 0 ? (
+                  return (
                     <>
-                      <div className="dead-recovery-video-list">
-                        {deadRecoveryVisibleItems(deadRecoveryData.top_candidates, "fullRecoveryList").map((v, i) => (
-                          <div className="dead-recovery-video-row" key={i}>
-                            {v.thumbnail ? (
-                              <img src={v.thumbnail} alt={v.title} className="dead-recovery-thumb" />
-                            ) : (
-                              <div className="dead-recovery-thumb placeholder">No Thumbnail</div>
-                            )}
+                      <div className="full-recovery-list">
+                        {visibleRecoveryRows.map((v, i) => (
+                          <div className="full-recovery-row" key={v.video_id || i}>
+                            <div className="full-recovery-left">
+                              {v.thumbnail ? (
+                                <img src={v.thumbnail} className="full-recovery-thumb" loading="lazy" />
+                              ) : (
+                                <div className="full-recovery-thumb placeholder">No Thumbnail</div>
+                              )}
 
-                            <div className="dead-recovery-video-main">
-                              <b>#{i + 1} {v.title}</b>
-                              <div className="dead-recovery-video-meta">
-                                <span>{v.player || "Unknown"}</span>
-                                <span>{normalizeContentFormat(v.content_type)}</span>
-                                <span>{v.recovery_category || "Recovery"}</span>
-                                <span>{(v.views || 0).toLocaleString()} views</span>
+                              <div className="full-recovery-main">
+                                <b>#{i + 1} {v.title}</b>
+                                <div className="full-recovery-tags">
+                                  <span>{v.player || "Unknown"}</span>
+                                  <span>{normalizeContentFormat(`${v.content_type || ""} ${v.title || ""}`)}</span>
+                                  <span>{v.recovery_category || "Monitor"}</span>
+                                  <span>{(v.views || 0).toLocaleString()} views</span>
+                                </div>
+                                <p>{v.reason || "CourtVision is monitoring this video for future recovery opportunity."}</p>
                               </div>
                             </div>
 
-                            <div className="dead-recovery-video-money">
+                            <div className="full-recovery-stats">
                               <div>
                                 <span>Score</span>
                                 <b>{v.recovery_score || 0}</b>
                               </div>
-
                               <div>
                                 <span>Revenue</span>
                                 <b>{formatMoney(v.manual_revenue || 0)}</b>
                               </div>
-
                               <div>
                                 <span>RPM</span>
                                 <b>{formatMoney(v.manual_rpm || 0)}</b>
                               </div>
-
                               <div>
-                                <span>100k Est.</span>
+                                <span>100K Est.</span>
                                 <b>{formatMoney(v.estimated_revenue_if_100k_views || 0)}</b>
                               </div>
                             </div>
                           </div>
                         ))}
+
+                        {!sortedRecoveryRows.length && (
+                          <div className="content-studio-empty">No recovery rows available yet. Sync your channel and Revenue Tracker data first.</div>
+                        )}
                       </div>
 
-                      {deadRecoveryData.top_candidates?.length > 5 && (
-                        <button className="dead-recovery-show-more" onClick={() => toggleDeadRecoveryList("fullRecoveryList")}>
-                          {isDeadRecoveryListExpanded("fullRecoveryList") ? "Show Less" : "Show More"}
+                      {sortedRecoveryRows.length > 50 && (
+                        <button className="idea-lab-show-more" onClick={() => toggleDeadRecoveryList("fullRecoveryList")}>
+                          {expanded ? "Show First 50" : `Show All ${sortedRecoveryRows.length} Videos`}
                         </button>
                       )}
                     </>
-                  ) : (
-                    <p>No full recovery list yet.</p>
+                  )
+                })()}
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === "endScreenOptimizer" && (
+          <div className="end-screen-optimizer">
+            <div className="card end-screen-hero">
+              <span className="content-studio-badge">Optimization Suite</span>
+              <h2>End Screen Optimizer</h2>
+              <p>
+                A complete channel-wide plan showing every video from most recent to oldest, with the best two end-screen recommendations chosen from synced revenue, RPM, views, player fit, format match, and session continuation signals.
+              </p>
+            </div>
+
+            <div className="grid end-screen-metrics">
+              <div className="card stat-card metric-card">
+                <h2>{endScreenData?.summary?.overall_end_screen_score || 0}/100</h2>
+                <p>Overall End Screen Score</p>
+              </div>
+
+              <div className="card stat-card metric-card">
+                <h2>{(endScreenData?.summary?.estimated_extra_views || 0).toLocaleString()}</h2>
+                <p>Estimated Extra Views</p>
+              </div>
+
+              <div className="card stat-card metric-card primary-revenue-card">
+                <h2>{formatMoney(endScreenData?.summary?.estimated_extra_revenue || 0)}</h2>
+                <p>Estimated Extra Revenue</p>
+              </div>
+
+              <div className="card stat-card metric-card">
+                <h2>{endScreenData?.summary?.videos_ready || 0}</h2>
+                <p>Videos Ready</p>
+              </div>
+            </div>
+
+            <div className="card end-screen-change-panel">
+              <div className="end-screen-tab-row">
+                <button className={endScreenView === "plan" ? "active" : ""} onClick={() => setEndScreenView("plan")}>Current Plan</button>
+                <button className={endScreenView === "changes" ? "active" : ""} onClick={() => setEndScreenView("changes")}>Changes Since Last Sync</button>
+              </div>
+
+              {endScreenView === "changes" && (
+                <div className="end-screen-change-list">
+                  {endScreenChanges.length ? endScreenChanges.map(change => (
+                    <div className="end-screen-change-row" key={change.video_id}>
+                      <div>
+                        <b>{change.title}</b>
+                        <span>{change.reason}</span>
+                      </div>
+                      <div className="end-screen-change-details">
+                        {change.changed_first && <small>#1: {change.previous_first} → {change.current_first}</small>}
+                        {change.changed_second && <small>#2: {change.previous_second} → {change.current_second}</small>}
+                        <small>{(change.estimated_extra_views || 0).toLocaleString()} projected extra views • {formatMoney(change.estimated_extra_revenue || 0)} projected revenue</small>
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="content-studio-empty">No recommendation changes since the last saved optimizer plan.</div>
                   )}
                 </div>
-              </>
+              )}
+            </div>
+
+            {endScreenView === "plan" && (
+            <div className="card end-screen-table-card">
+              <div className="auto-revenue-header compact">
+                <div>
+                  <h2>All Videos End Screen Plan</h2>
+                  <p>Newest videos are first. Each card shows the source video, then the exact two videos CourtVision recommends underneath it.</p>
+                </div>
+                <span className="top-earning-count">{endScreenRows.length} Videos</span>
+              </div>
+
+              <div className="end-screen-card-list">
+                {endScreenRows.map(item => {
+                  const source = item.source_video || {}
+                  const recommendations = item.recommendations || []
+
+                  return (
+                    <div className="end-screen-video-card" key={source.video_id || source.title}>
+                      <div className="end-screen-source-card">
+                        {source.thumbnail ? (
+                          <img src={source.thumbnail} className="end-screen-source-thumb" loading="lazy" />
+                        ) : (
+                          <div className="end-screen-source-thumb placeholder">No Thumbnail</div>
+                        )}
+
+                        <div className="end-screen-source-copy">
+                          <span className="content-studio-badge">Source Video</span>
+                          <h3>{source.title || "Untitled Video"}</h3>
+                          <div className="end-screen-source-metrics compact-metrics">
+                            <span>{source.player || "Unknown"}</span>
+                            <span>{(source.views || 0).toLocaleString()} views</span>
+                            <span>{formatMoney(source.revenue || 0)} revenue</span>
+                            <span>{Number(item.end_screen_score || 0).toFixed(1)}/100 score</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="end-screen-picks-title">Recommended End Screen Videos</div>
+
+                      <div className="end-screen-picks-grid">
+                        {[0, 1].map(index => {
+                          const recommendation = recommendations[index]
+
+                          if (!recommendation) {
+                            return (
+                              <div className="end-screen-pick-card empty" key={index}>
+                                <div className="end-screen-pick-thumb placeholder">No Match</div>
+                                <div>
+                                  <span>Pick #{index + 1}</span>
+                                  <b>Needs more eligible videos</b>
+                                  <small>Sync more videos or revenue data.</small>
+                                </div>
+                              </div>
+                            )
+                          }
+
+                          return (
+                            <div className="end-screen-pick-card" key={recommendation.video_id || recommendation.title}>
+                              {recommendation.thumbnail ? (
+                                <img src={recommendation.thumbnail} className="end-screen-pick-thumb" loading="lazy" />
+                              ) : (
+                                <div className="end-screen-pick-thumb placeholder">No Thumbnail</div>
+                              )}
+
+                              <div>
+                                <span>Pick #{index + 1}</span>
+                                <b>{recommendation.title}</b>
+                                <small>{recommendation.player || "Unknown"} • {(recommendation.views || 0).toLocaleString()} views • {recommendation.score}/100 match</small>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+
+                      <div className="end-screen-card-footer">
+                        <b>Why:</b>
+                        <span>{item.summary_reason || "CourtVision selected these to improve viewer continuation."}</span>
+                      </div>
+                    </div>
+                  )
+                })}
+
+                {!endScreenRows.length && (
+                  <div className="content-studio-empty">No end-screen recommendations are available yet. Sync your channel and Revenue Tracker data first.</div>
+                )}
+              </div>
+            </div>
             )}
           </div>
         )}
@@ -3501,31 +4665,6 @@ function App() {
               </p>
             </div>
 
-            <div className="idea-lab-metric-grid">
-              <div className="idea-lab-metric-card">
-                <span>Players Ranked</span>
-                <b>{players.length}</b>
-                <small>top database picks returned</small>
-              </div>
-
-              <div className="idea-lab-metric-card">
-                <span>Best Pick</span>
-                <b>{players[0]?.name || "—"}</b>
-                <small>highest decision score</small>
-              </div>
-
-              <div className="idea-lab-metric-card">
-                <span>Expected Revenue</span>
-                <b>{formatMoney(players[0]?.projected_revenue || 0)}</b>
-                <small>single exact-style estimate</small>
-              </div>
-
-              <div className="idea-lab-metric-card">
-                <span>Confidence</span>
-                <b>{players[0]?.revenue_confidence || "—"}</b>
-                <small>based on available data</small>
-              </div>
-            </div>
 
             <div className="idea-lab-panel">
               <div className="idea-lab-panel-heading">
@@ -3537,8 +4676,10 @@ function App() {
                 <>
                   <div className="idea-lab-list">
                     {ideaLabVisibleItems(players, "bestIdeas").map((p, i) => (
-                      <div className="idea-lab-row" key={i}>
+                      <div className="idea-lab-row enhanced-idea-row" key={i}>
                         <div className="idea-lab-rank">#{i + 1}</div>
+
+                        <PlayerWikiImage player={p} fallbackUrl={ideaPlayerThumbnail(p)} />
 
                         <div className="idea-lab-main">
                           <b>{p.name}</b>
@@ -3590,57 +4731,7 @@ function App() {
               )}
             </div>
 
-            <div className="idea-lab-two-col">
-              <div className="idea-lab-panel">
-                <div className="idea-lab-panel-heading">
-                  <span>Best Undone Top 10s</span>
-                  <small>highest content-gap value</small>
-                </div>
 
-                <div className="idea-lab-mini-list">
-                  {ideaLabVisibleItems(players.filter(p => !p.top_10_done), "undone").map((p, i) => (
-                    <div className="idea-lab-mini-row" key={i}>
-                      <div>
-                        <b>#{i + 1} {p.name}</b>
-                        <small>{p.era || "Unknown"} • {p.priority || "Unranked"}</small>
-                      </div>
-                      <strong>{formatMoney(p.projected_revenue || 0)}</strong>
-                    </div>
-                  ))}
-                </div>
-
-                {players.filter(p => !p.top_10_done).length > 5 && (
-                  <button className="idea-lab-show-more" onClick={() => toggleIdeaLabList("undone")}>
-                    {isIdeaLabListExpanded("undone") ? "Show Less" : "Show More"}
-                  </button>
-                )}
-              </div>
-
-              <div className="idea-lab-panel">
-                <div className="idea-lab-panel-heading">
-                  <span>Safest Money Picks</span>
-                  <small>lower risk + stronger return</small>
-                </div>
-
-                <div className="idea-lab-mini-list">
-                  {ideaLabVisibleItems([...players].filter(p => Number(p.copyright_risk || 0) <= 55).sort((a, b) => Number(b.projected_revenue || 0) - Number(a.projected_revenue || 0)), "safeMoney").map((p, i) => (
-                    <div className="idea-lab-mini-row" key={i}>
-                      <div>
-                        <b>#{i + 1} {p.name}</b>
-                        <small>Risk: {p.copyright_risk}% • {p.revenue_confidence}</small>
-                      </div>
-                      <strong>{formatMoney(p.projected_revenue || 0)}</strong>
-                    </div>
-                  ))}
-                </div>
-
-                {players.filter(p => Number(p.copyright_risk || 0) <= 55).length > 5 && (
-                  <button className="idea-lab-show-more" onClick={() => toggleIdeaLabList("safeMoney")}>
-                    {isIdeaLabListExpanded("safeMoney") ? "Show Less" : "Show More"}
-                  </button>
-                )}
-              </div>
-            </div>
           </div>
         )}
 
@@ -3797,6 +4888,293 @@ function App() {
         )}
 
 
+
+        {tab === "communityAutomation" && (
+          <div className="community-automation-page">
+            <div className="card big community-hero-card">
+              <div className="community-hero-content">
+                <span className="editor-kicker">Community Automation</span>
+                <h2>Community Automation</h2>
+                <p>
+                  3-posts-per-week community schedule based on all-time community history, synced videos, Idea Lab candidates, and the results you log here.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid community-summary-grid">
+              <div className="card stat-card community-stat-card">
+                <h2>{communityData?.next_post?.time || "—"}</h2>
+                <p>Next Best Time</p>
+              </div>
+              <div className="card stat-card community-stat-card">
+                <h2>{communityData?.next_post?.type ? formatDisplayText(communityData.next_post.type) : "—"}</h2>
+                <p>Next Post Type</p>
+              </div>
+              <div className="card stat-card community-stat-card">
+                <h2>{Number(communityData?.summary?.engagement_score || 0).toFixed(1)}</h2>
+                <p>Engagement Score</p>
+              </div>
+              <div className="card stat-card community-stat-card">
+                <h2>{Number(communityData?.summary?.total_posts || 0).toLocaleString()}</h2>
+                <p>Posts Logged</p>
+              </div>
+            </div>
+
+            {communityData?.next_post && (
+              <div className="card big community-next-card">
+                <div>
+                  <span className="editor-kicker">Next Recommended Post</span>
+                  <h2>{communityData.next_post.day} • {communityData.next_post.time}</h2>
+                  <h3>{communityData.next_post.title}</h3>
+                  <p className="community-post-copy">{communityData.next_post.post_text}</p>
+                  <div className="community-option-row">
+                    {(communityData.next_post.options || []).map((option, index) => (
+                      <span key={index}>{option}</span>
+                    ))}
+                  </div>
+                  <div className="community-next-note">
+                    <span>Built from Idea Lab + all-time community post history</span>
+                  </div>
+                </div>
+                <div className="community-score-box">
+                  <div><span>Expected Votes</span><b>{communityData.next_post.expected_votes}</b></div>
+                  <div><span>Expected Likes</span><b>{communityData.next_post.expected_likes}</b></div>
+                  <div><span>Expected Comments</span><b>{communityData.next_post.expected_comments}</b></div>
+                  <div><span>Confidence</span><b>{communityData.next_post.confidence_percent || communityData.next_post.confidence}</b></div>
+                </div>
+                <button className="sync" onClick={() => useCommunitySuggestion(communityData.next_post)}>Use This Post</button>
+              </div>
+            )}
+
+            <div className="card big community-section-card">
+              <div className="community-section-header">
+                <div>
+                  <span className="editor-kicker">Weekly Schedule</span>
+                  <h2>Exact 3-Post Weekly Schedule</h2>
+                </div>
+                <small>Updates as you log poll/trivia/post results.</small>
+              </div>
+
+              <div className="community-schedule-list">
+                {(communityData?.schedule || []).map((post, index) => (
+                  <div className="community-schedule-row" key={index}>
+                    <div className="community-date-box">
+                      <b>{post.day}</b>
+                      <span>{formatDateShort(post.date)}</span>
+                      <strong>{post.time}</strong>
+                    </div>
+                    <div className="community-schedule-main">
+                      <span className="content-studio-badge">{formatDisplayText(post.type)}</span>
+                      <h3>{post.title}</h3>
+                      <p className="community-post-copy">{post.post_text}</p>
+                      <div className="community-option-row">
+                        {(post.options || []).map((option, optionIndex) => (
+                          <span key={optionIndex}>{option}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="community-schedule-stats">
+                      <div><span>Votes</span><b>{post.expected_votes}</b></div>
+                      <div><span>Likes</span><b>{post.expected_likes}</b></div>
+                      <div><span>Confidence</span><b>{post.confidence_percent || post.confidence}</b></div>
+                      <button className="sync" onClick={() => useCommunitySuggestion(post)}>Log This</button>
+                    </div>
+                  </div>
+                ))}
+
+                {(!communityData || (communityData?.schedule || []).length === 0) && (
+                  <p>Community schedule is loading. Click refresh if it does not appear.</p>
+                )}
+              </div>
+            </div>
+
+            <div className="card big community-section-card">
+              <div className="community-section-header compact">
+                <div>
+                  <span className="editor-kicker">Learning Engine</span>
+                  <h2>What Viewers Like</h2>
+                </div>
+              </div>
+
+              <div className="community-learning-dashboard">
+                <div className="community-learning-primary">
+                  <span>Best Format</span>
+                  <b>{formatDisplayText(communityData?.summary?.best_type || "Player Debate")}</b>
+                  <small>highest engagement per post</small>
+                </div>
+                <div className="community-learning-primary">
+                  <span>Best Time</span>
+                  <b>{communityData?.summary?.best_time || "7:00 PM"}</b>
+                  <small>use when no upload timing conflict</small>
+                </div>
+                <div className="community-learning-primary">
+                  <span>Best Poll Size</span>
+                  <b>{communityData?.summary?.best_option_count || communityData?.learning?.best_option_count || 4} options</b>
+                  <small>clean enough for fast voting</small>
+                </div>
+                <div className="community-learning-primary">
+                  <span>Cadence</span>
+                  <b>{communityData?.summary?.recommended_weekly_cadence || "3 posts/week"}</b>
+                  <small>steady without burning viewers out</small>
+                </div>
+              </div>
+
+              <div className="community-signal-strip">
+                <div><span>Top Topic</span><b>{communityData?.summary?.best_topic || "Player debates"}</b></div>
+                <div><span>Best Season</span><b>{communityData?.summary?.best_season || communityData?.learning?.best_season || "Playoffs / Finals"}</b></div>
+                <div><span>Total Votes</span><b>{Number(communityData?.summary?.total_votes || 0).toLocaleString()}</b></div>
+                <div><span>Logged Posts</span><b>{Number(communityData?.summary?.total_posts || 0).toLocaleString()}</b></div>
+              </div>
+
+              {communityData?.learning?.insights?.length > 0 && (
+                <div className="community-insight-list compact-insights">
+                  {communityData.learning.insights.slice(0, 4).map((insight, index) => (
+                    <span key={index}>{insight}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="card big community-section-card">
+              <div className="community-section-header">
+                <div>
+                  <span className="editor-kicker">Result Tracker</span>
+                  <h2>Log Poll / Trivia / Community Results</h2>
+                </div>
+                <small>Fast manual entry. Date/time optional. Use Edit / Update below when poll numbers change.</small>
+              </div>
+
+              <form className="community-result-form" onSubmit={submitCommunityResult}>
+                {communityForm.id && <div className="community-edit-banner full">Editing saved post #{communityForm.id}. Change any numbers or percentages, then save again.</div>}
+                <input type="date" value={communityForm.post_date} onChange={e => updateCommunityForm("post_date", e.target.value)} />
+                <input placeholder="Post time, optional" value={communityForm.post_time} onChange={e => updateCommunityForm("post_time", e.target.value)} />
+                <select value={communityForm.post_type} onChange={e => updateCommunityForm("post_type", e.target.value)}>
+                  <option value="Next Upload Poll">Next Upload Poll</option>
+                  <option value="Player Debate">Player Debate</option>
+                  <option value="Trivia / Guess Who">Trivia / Guess Who</option>
+                  <option value="Upload Teaser">Upload Teaser</option>
+                  <option value="Community Question">Community Question</option>
+                  <option value="Throwback / History Post">Throwback / History Post</option>
+                </select>
+                <button className="editor-btn" type="button" onClick={resetCommunityForm}>Clear / New</button>
+                <textarea className="full community-post-textarea" placeholder="Paste the community post text here" value={communityForm.post_text} onChange={e => updateCommunityForm("post_text", e.target.value)} />
+
+                {(String(communityForm.post_type).toLowerCase().includes("poll") || String(communityForm.post_type).toLowerCase().includes("debate")) && (
+                  <div className="community-poll-option-grid full">
+                    <div className="community-option-input-pair">
+                      <label>Option A</label>
+                      <div>
+                        <input placeholder="Player / choice" value={communityForm.option_a} onChange={e => updateCommunityForm("option_a", e.target.value)} />
+                        <input placeholder="%" value={communityForm.option_a_percent} onChange={e => updateCommunityForm("option_a_percent", e.target.value)} />
+                      </div>
+                    </div>
+
+                    <div className="community-option-input-pair">
+                      <label>Option B</label>
+                      <div>
+                        <input placeholder="Player / choice" value={communityForm.option_b} onChange={e => updateCommunityForm("option_b", e.target.value)} />
+                        <input placeholder="%" value={communityForm.option_b_percent} onChange={e => updateCommunityForm("option_b_percent", e.target.value)} />
+                      </div>
+                    </div>
+
+                    <div className="community-option-input-pair">
+                      <label>Option C</label>
+                      <div>
+                        <input placeholder="Player / choice" value={communityForm.option_c} onChange={e => updateCommunityForm("option_c", e.target.value)} />
+                        <input placeholder="%" value={communityForm.option_c_percent} onChange={e => updateCommunityForm("option_c_percent", e.target.value)} />
+                      </div>
+                    </div>
+
+                    <div className="community-option-input-pair">
+                      <label>Option D</label>
+                      <div>
+                        <input placeholder="Player / choice" value={communityForm.option_d} onChange={e => updateCommunityForm("option_d", e.target.value)} />
+                        <input placeholder="%" value={communityForm.option_d_percent} onChange={e => updateCommunityForm("option_d_percent", e.target.value)} />
+                      </div>
+                    </div>
+
+                    <div className="community-option-input-pair">
+                      <label>Option E</label>
+                      <div>
+                        <input placeholder="Player / choice" value={communityForm.option_e} onChange={e => updateCommunityForm("option_e", e.target.value)} />
+                        <input placeholder="%" value={communityForm.option_e_percent} onChange={e => updateCommunityForm("option_e_percent", e.target.value)} />
+                      </div>
+                    </div>
+
+                    <input className="community-winner-input" placeholder="Winner / top option, ex: Jason Kidd" value={communityForm.poll_winner} onChange={e => updateCommunityForm("poll_winner", e.target.value)} />
+                  </div>
+                )}
+
+                {String(communityForm.post_type).toLowerCase().includes("trivia") && (
+                  <input className="full" placeholder="Correct answer / best answer if known" value={communityForm.trivia_answer} onChange={e => updateCommunityForm("trivia_answer", e.target.value)} />
+                )}
+
+                {String(communityForm.post_type).toLowerCase().includes("teaser") && (
+                  <>
+                    <input placeholder="Linked video title, optional" value={communityForm.linked_video_title} onChange={e => updateCommunityForm("linked_video_title", e.target.value)} />
+                    <input placeholder="Linked video ID, optional" value={communityForm.linked_video_id} onChange={e => updateCommunityForm("linked_video_id", e.target.value)} />
+                  </>
+                )}
+
+                <input placeholder="Likes" value={communityForm.likes} onChange={e => updateCommunityForm("likes", e.target.value)} />
+                <input placeholder="Comments" value={communityForm.comments} onChange={e => updateCommunityForm("comments", e.target.value)} />
+                <input placeholder="Votes" value={communityForm.votes} onChange={e => updateCommunityForm("votes", e.target.value)} />
+                <button className="sync full" type="submit" disabled={communitySaving}>{communitySaving ? "Saving..." : communityForm.id ? "Update Community Result" : "Save Community Result"}</button>
+              </form>
+            </div>
+
+            <div className="card big community-section-card">
+              <div className="community-section-header">
+                <div>
+                  <span className="editor-kicker">History</span>
+                  <h2>Logged Community Posts</h2>
+                </div>
+              </div>
+
+              <div className="community-history-list">
+                {(communityHistoryExpanded ? (communityData?.history || []) : (communityData?.history || []).slice(0, 5)).map((entry, index) => (
+                  <div className="community-history-row" key={entry.id || index}>
+                    <div>
+                      <b>{entry.poll_winner || entry.topic || formatDisplayText(entry.post_type)}</b>
+                      <span>{formatDateShort(entry.post_date)} • {entry.post_time || "No time"} • {formatDisplayText(entry.post_type)}</span>
+                      <small>{entry.post_text}</small>
+                      {(entry.option_a || entry.option_b || entry.option_c || entry.option_d || entry.option_e) && (
+                        <div className="community-history-options">
+                          {entry.option_a && <span>{entry.option_a} {entry.option_a_percent ? `• ${entry.option_a_percent}%` : ""}</span>}
+                          {entry.option_b && <span>{entry.option_b} {entry.option_b_percent ? `• ${entry.option_b_percent}%` : ""}</span>}
+                          {entry.option_c && <span>{entry.option_c} {entry.option_c_percent ? `• ${entry.option_c_percent}%` : ""}</span>}
+                          {entry.option_d && <span>{entry.option_d} {entry.option_d_percent ? `• ${entry.option_d_percent}%` : ""}</span>}
+                          {entry.option_e && <span>{entry.option_e} {entry.option_e_percent ? `• ${entry.option_e_percent}%` : ""}</span>}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <span>{Number(entry.votes || 0).toLocaleString()} votes</span>
+                      <span>{Number(entry.likes || 0).toLocaleString()} likes</span>
+                      <span>{Number(entry.comments || 0).toLocaleString()} comments</span>
+                      <button className="editor-mini-btn" type="button" onClick={() => editCommunityEntry(entry)}>Edit / Update</button>
+                    </div>
+                  </div>
+                ))}
+
+                {(communityData?.history || []).length === 0 && (
+                  <p>No community results logged yet. Add your first poll or trivia result above.</p>
+                )}
+
+                {(communityData?.history || []).length > 5 && (
+                  <button
+                    className="editor-btn community-show-more-btn"
+                    type="button"
+                    onClick={() => setCommunityHistoryExpanded(prev => !prev)}
+                  >
+                    {communityHistoryExpanded ? "Show Recent 5" : `Show All ${(communityData?.history || []).length} Posts`}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {tab === "contentStudio" && (
           <div className="content-studio editor-mode">
             <div className="editor-topbar">
@@ -3818,6 +5196,20 @@ function App() {
                       Approve
                     </button>
 
+                    {contentStudioActiveProject?.project_type === "top10" && (
+                      <button className="editor-btn" onClick={autoDetectContentStudioClips}>
+                        Detect 10 Clips
+                      </button>
+                    )}
+
+                    <button
+                      className="editor-btn"
+                      onClick={renderContentStudioSolos}
+                      disabled={contentStudioActiveProject?.solo_export_status === "exporting"}
+                    >
+                      {contentStudioActiveProject?.solo_export_status === "exporting" ? "Exporting Solos..." : "Export Solos"}
+                    </button>
+
                     <button
                       className="editor-btn"
                       onClick={renderContentStudioProject}
@@ -3834,7 +5226,12 @@ function App() {
                           return
                         }
 
-                        alert("YouTube upload is the next step. Final rendered video is ready, but upload is still permission-only placeholder.")
+                        if (!isContentStudioPreviewConfirmed()) {
+                          alert("Confirm the final video preview first. Then the upload step unlocks.")
+                          return
+                        }
+
+                        alert("YouTube upload is the next step. Final rendered video is ready, preview confirmed, but upload is still permission-only placeholder.")
                       }}
                     >
                       Upload
@@ -3864,16 +5261,35 @@ function App() {
                 <span>Template</span>
                 <b>
                   {contentStudioProjectType === "top10"
-                    ? "Intro + 10 Clips + Outro + Music"
-                    : "Clip + Outro"}
+                    ? "10 Overlays + Fades + Outro"
+                    : "Clip + Fades + Outro"}
                 </b>
+              </div>
+            </div>
+
+            <div className="nba-pipeline-card">
+              <div>
+                <span className="editor-kicker">NBA Production Pipeline</span>
+                <h3>{contentStudioActiveProject?.project_name || contentStudioProjectName || "Top 10 Production Pipeline"}</h3>
+                <p>
+                  Upload a long source video or individual clips, create editable clip slots, trim each play,
+                  arrange the final order from #10 to #1, export solo highlights, then render the finished countdown.
+                </p>
+              </div>
+
+              <div className="nba-pipeline-steps">
+                <span>1 Upload</span>
+                <span>2 Detect / Trim</span>
+                <span>3 Rank #10 → #1</span>
+                <span>4 Export Solos</span>
+                <span>5 Render Countdown</span>
               </div>
             </div>
 
             <div className="editor-create-card">
               <div className="editor-panel-title">
                 <span>New Project</span>
-                <small>Import MP4 files from your computer</small>
+                <small>Upload one long source MP4 or separate clips</small>
               </div>
 
               <div className="editor-create-grid">
@@ -3992,6 +5408,17 @@ function App() {
                         }}
                       />
 
+                      <div className="preview-confirm-row">
+                        <button
+                          className={isContentStudioPreviewConfirmed() ? "editor-btn preview-confirmed" : "editor-btn editor-btn-primary"}
+                          type="button"
+                          onClick={confirmContentStudioPreview}
+                        >
+                          {isContentStudioPreviewConfirmed() ? "Preview Confirmed" : "Confirm Final Preview"}
+                        </button>
+                        <small>Upload and YouTube draft steps stay locked until you confirm the rendered video.</small>
+                      </div>
+
                       <div className="quick-stat">
                         <span>Duration</span>
                         <b>{contentStudioActiveProject.rendered_video.duration_seconds || "—"} seconds</b>
@@ -4026,9 +5453,12 @@ function App() {
                           <button
                             key={clip.clip_id}
                             className={clip.clip_id === selectedClip?.clip_id ? "media-bin-item selected" : "media-bin-item"}
-                            onClick={() => setContentStudioSelectedClipId(clip.clip_id)}
+                            onClick={() => {
+                              setContentStudioPreviewOutroActive(false)
+                              setContentStudioSelectedClipId(clip.clip_id)
+                            }}
                           >
-                            <video src={`${API}${clip.preview_url}`} muted />
+                            <video src={`${API}${clip.preview_url}`} muted playsInline preload="metadata" />
                             <div>
                               <b>{clip.title || `Clip ${index + 1}`}</b>
                               <small>
@@ -4043,15 +5473,16 @@ function App() {
                         <b>Template Assets</b>
                         {isTop10 ? (
                           <>
-                            <small>Intro: intro.mp4</small>
+                            <small>Intro: optional intro.mp4</small>
+                            <small>Countdown: 10.png → 1.png bottom-left</small>
+                            <small>Fade: 0.1 sec start/end of every clip</small>
                             <small>Outro: outro.png / 15 sec</small>
-                            <small>Music: cycles music folder</small>
                           </>
                         ) : (
                           <>
                             <small>Intro: off</small>
+                            <small>Fade: 0.1 sec start/end</small>
                             <small>Outro: outro.png / 15 sec</small>
-                            <small>Music: off</small>
                           </>
                         )}
                       </div>
@@ -4063,25 +5494,35 @@ function App() {
                         <small>{selectedClip ? selectedClip.title : "No clip selected"}</small>
                       </div>
 
-                      <div className="preview-screen">
+                      <div className="preview-screen editor-monitor-screen">
                         {contentStudioActiveProject.rendered_video?.preview_url ? (
                           <video
                             ref={contentStudioPreviewRef}
                             src={`${API}${contentStudioActiveProject.rendered_video.preview_url}`}
-                            controls
                             key={`rendered-${contentStudioActiveProject.rendered_video.filename || contentStudioActiveProject.updated_at || contentStudioActiveProject.project_id}`}
+                            playsInline
+                            preload="metadata"
+                            onPlay={() => setContentStudioPreviewPlaying(true)}
+                            onPause={() => setContentStudioPreviewPlaying(false)}
+                            onEnded={() => setContentStudioPreviewPlaying(false)}
                             onTimeUpdate={(event) => {
                               const total = getContentStudioTimelineTotalSeconds()
                               const current = Number(event.currentTarget.currentTime || 0)
                               setContentStudioPlayheadSeconds(Number(Math.min(current, total).toFixed(2)))
                             }}
                           />
+                        ) : contentStudioPreviewOutroActive ? (
+                          <div className="preview-outro-stage">
+                            <img src={`${API}/content-studio/assets/outro`} alt="Outro preview" />
+                            <div className="preview-outro-label">Attached outro • 15 seconds</div>
+                          </div>
                         ) : selectedClip ? (
                           <video
                             ref={contentStudioPreviewRef}
                             src={`${API}${selectedClip.preview_url}`}
-                            controls
                             key={selectedClip.clip_id}
+                            playsInline
+                            preload="metadata"
                             onLoadedMetadata={(event) => {
                               const duration = Number(event.currentTarget.duration || 0)
 
@@ -4093,12 +5534,58 @@ function App() {
 
                               event.currentTarget.currentTime = Number(selectedClip.trim_start || 0)
                             }}
+                            onPlay={(event) => {
+                              const start = Number(selectedClip.trim_start || 0)
+                              const end = Number(selectedClip.trim_end || 0) > start
+                                ? Number(selectedClip.trim_end)
+                                : getContentStudioClipDuration(selectedClip)
+
+                              if (Number(event.currentTarget.currentTime || 0) < start || Number(event.currentTarget.currentTime || 0) >= end) {
+                                event.currentTarget.currentTime = start
+                              }
+
+                              setContentStudioPreviewPlaying(true)
+                            }}
+                            onPause={() => setContentStudioPreviewPlaying(false)}
+                            onEnded={() => setContentStudioPreviewPlaying(false)}
                             onTimeUpdate={(event) => handleContentStudioPreviewTimeUpdate(event, selectedClip)}
                           />
                         ) : (
                           <div className="preview-empty">Select a clip from the timeline</div>
                         )}
                       </div>
+
+                      {selectedClip && !contentStudioActiveProject.rendered_video?.preview_url && (
+                        <div className="editor-monitor-controls">
+                          <div className="editor-monitor-buttons">
+                            <button type="button" className="monitor-control-btn" onClick={() => seekContentStudioSelectedClipRelative(0)} title="Go to trimmed start">|◀</button>
+                            <button type="button" className="monitor-control-btn" onClick={() => seekContentStudioSelectedClipRelative(getContentStudioPreviewRelativeTime(selectedClip) - (1 / 30))} title="Previous frame">◀|</button>
+                            <button type="button" className="monitor-control-btn primary" onClick={contentStudioPreviewPlaying ? pauseContentStudioPreview : playContentStudioPreview}>
+                              {contentStudioPreviewPlaying ? "Pause" : "Play"}
+                            </button>
+                            <button type="button" className="monitor-control-btn" onClick={stopContentStudioPreview}>Stop</button>
+                            <button type="button" className="monitor-control-btn" onClick={() => seekContentStudioSelectedClipRelative(getContentStudioPreviewRelativeTime(selectedClip) + (1 / 30))} title="Next frame">|▶</button>
+                            <button type="button" className="monitor-control-btn" onClick={() => seekContentStudioSelectedClipRelative(getContentStudioEffectiveClipDuration(selectedClip))} title="Go to trimmed end">▶|</button>
+                          </div>
+
+                          <input
+                            className="editor-monitor-scrubber"
+                            type="range"
+                            min="0"
+                            max={Math.max(0.01, getContentStudioEffectiveClipDuration(selectedClip))}
+                            step="0.01"
+                            value={Math.min(getContentStudioEffectiveClipDuration(selectedClip), getContentStudioPreviewRelativeTime(selectedClip))}
+                            onChange={(event) => seekContentStudioSelectedClipRelative(Number(event.target.value || 0))}
+                          />
+
+                          <div className="editor-monitor-timecode">
+                            <span>{formatVideoTime(getContentStudioPreviewRelativeTime(selectedClip))}</span>
+                            <b>/</b>
+                            <span>{formatVideoTime(getContentStudioEffectiveClipDuration(selectedClip))}</span>
+                            <small>Source {formatVideoTime(selectedClip.trim_start || 0)} → {formatVideoTime(Number(selectedClip.trim_end || 0) > Number(selectedClip.trim_start || 0) ? selectedClip.trim_end : getContentStudioClipDuration(selectedClip))}</small>
+                          </div>
+                        </div>
+                      )}
 
                   <div className="timeline-editor preview-timeline-editor">
                     <div className="timeline-header">
@@ -4107,8 +5594,45 @@ function App() {
                         <h3>{isTop10 ? "Top 10 Edit Timeline" : "Solo Highlight Timeline"}</h3>
                       </div>
 
-                      <div className="timeline-help">
-                        Click/drag to scrub • Drag either clip edge to trim
+                      <div className="timeline-toolbar">
+                        <button
+                          type="button"
+                          className="editor-mini-btn"
+                          onClick={undoContentStudioTrim}
+                          disabled={!contentStudioTrimHistory.length}
+                          title="Undo trim"
+                        >
+                          Undo
+                        </button>
+                        <button
+                          type="button"
+                          className="editor-mini-btn"
+                          onClick={redoContentStudioTrim}
+                          disabled={!contentStudioTrimFuture.length}
+                          title="Redo trim"
+                        >
+                          Redo
+                        </button>
+                        <button
+                          type="button"
+                          className="editor-mini-btn"
+                          onClick={resetContentStudioSelectedTrim}
+                          disabled={!selectedClip}
+                        >
+                          Reset Trim
+                        </button>
+                        <label className="timeline-zoom-control">
+                          <span>Zoom</span>
+                          <input
+                            type="range"
+                            min="4"
+                            max="32"
+                            step="1"
+                            value={contentStudioTimelineZoom}
+                            onChange={(event) => setContentStudioTimelineZoom(Number(event.target.value || 12))}
+                          />
+                          <b>{contentStudioTimelineZoom}px/s</b>
+                        </label>
                       </div>
                     </div>
 
@@ -4116,7 +5640,7 @@ function App() {
                       <div className="timeline-row">
                         <div className="track-label">Intro</div>
                         <div className="track-lane">
-                          <div className="timeline-asset intro">intro.mp4</div>
+                          <div className="timeline-asset intro">optional intro.mp4</div>
                         </div>
                       </div>
                     )}
@@ -4126,6 +5650,9 @@ function App() {
                       <div
                         className="track-lane video-track"
                         onMouseDown={handleContentStudioTimelineClick}
+                        style={{
+                          minWidth: `${Math.max(760, (getContentStudioTimelineTotalSeconds() + 15) * contentStudioTimelineZoom + 40)}px`
+                        }}
                       >
                         <div
                           className="timeline-playhead"
@@ -4141,7 +5668,13 @@ function App() {
                             <div
                               key={clip.clip_id}
                               draggable
-                              onDragStart={() => setContentStudioDragClipId(clip.clip_id)}
+                              onDragStart={(event) => {
+                                if (event.target.closest(".trim-handle")) {
+                                  event.preventDefault()
+                                  return
+                                }
+                                setContentStudioDragClipId(clip.clip_id)
+                              }}
                               onDragOver={(e) => e.preventDefault()}
                               onDrop={() => reorderContentStudioClips(contentStudioDragClipId, clip.clip_id)}
                               onClick={(event) => {
@@ -4151,16 +5684,19 @@ function App() {
                               }}
                               className={active ? "timeline-clip selected" : "timeline-clip"}
                               style={{
-                                flexBasis: `${Math.max(210, Math.min(520, getContentStudioEffectiveClipDuration(clip) * 5))}px`
+                                width: `${getContentStudioTimelineClipWidth(clip)}px`,
+                                minWidth: `${getContentStudioTimelineClipWidth(clip)}px`,
+                                maxWidth: `${getContentStudioTimelineClipWidth(clip)}px`,
+                                flex: `0 0 ${getContentStudioTimelineClipWidth(clip)}px`
                               }}
                             >
                               <div
                                 className="trim-handle left"
                                 title="Drag to trim the start"
-                                onMouseDown={(event) => startContentStudioTrimDrag(event, clip, "left")}
+                                onPointerDown={(event) => startContentStudioTrimDrag(event, clip, "left")}
                               />
                               <div className="clip-thumb">
-                                <video src={`${API}${clip.preview_url}`} muted />
+                                <video src={`${API}${clip.preview_url}`} muted playsInline preload="metadata" />
                               </div>
 
                               <div className="clip-text">
@@ -4168,16 +5704,25 @@ function App() {
                                 <small>
                                   {formatVideoTime(clip.trim_start || 0)} → {formatVideoTime(Number(clip.trim_end || 0) > Number(clip.trim_start || 0) ? clip.trim_end : getContentStudioClipDuration(clip))}
                                 </small>
+                                <em>{getContentStudioEffectiveClipDuration(clip).toFixed(2)}s</em>
                               </div>
 
                               <div
                                 className="trim-handle right"
                                 title="Drag to trim the end"
-                                onMouseDown={(event) => startContentStudioTrimDrag(event, clip, "right")}
+                                onPointerDown={(event) => startContentStudioTrimDrag(event, clip, "right")}
                               />
                             </div>
                           )
                         })}
+
+                        <div
+                          className="timeline-asset outro timeline-attached-outro"
+                          title="This outro is always attached to the final clip"
+                        >
+                          <span>Outro</span>
+                          <small>15 sec</small>
+                        </div>
                       </div>
                     </div>
 
@@ -4197,7 +5742,7 @@ function App() {
                         <div className="timeline-row">
                           <div className="track-label">Music</div>
                           <div className="track-lane">
-                            <div className="timeline-music">music folder cycles through 5 mp3 files</div>
+                            <div className="timeline-music">optional music folder if files exist</div>
                           </div>
                         </div>
                       </>
@@ -4207,49 +5752,78 @@ function App() {
 
                       {contentStudioActiveProject.rendered_video?.preview_url && (
                         <div className="rendered-preview-note">
-                          Showing final rendered MP4 with the outro attached. Change trims, save, and render again to update this preview.
+                          Showing final rendered MP4. Top 10 renders include countdown PNG overlays, 0.1 second fades, and the outro. Change trims, save, and render again to update.
+                          <button
+                            className={isContentStudioPreviewConfirmed() ? "editor-mini-btn preview-confirmed" : "editor-mini-btn editor-btn-primary"}
+                            type="button"
+                            onClick={confirmContentStudioPreview}
+                          >
+                            {isContentStudioPreviewConfirmed() ? "Preview Confirmed" : "Confirm Preview"}
+                          </button>
+                        </div>
+                      )}
+
+                      {contentStudioActiveProject.solo_exports?.length > 0 && (
+                        <div className="solo-export-list">
+                          <div className="editor-panel-title">
+                            <span>Solo Exports</span>
+                            <small>{contentStudioActiveProject.solo_exports.filter(item => item.ok).length} ready</small>
+                          </div>
+
+                          {contentStudioActiveProject.solo_exports.filter(item => item.ok).slice(0, 8).map((item, index) => (
+                            <a
+                              key={`${item.filename || index}`}
+                              href={`${API}${item.preview_url}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="solo-export-link"
+                            >
+                              <span>{index + 1}. {item.title || item.filename}</span>
+                              <b>Open MP4</b>
+                            </a>
+                          ))}
+
+                          {contentStudioActiveProject.solo_exports.filter(item => item.ok).length > 8 && (
+                            <small className="solo-export-more">
+                              Showing first 8 exports. All exported files are saved in uploads/content_studio/rendered/{contentStudioActiveProject.project_id}/solos.
+                            </small>
+                          )}
                         </div>
                       )}
 
                     <div className="editor-properties editor-properties-under-preview">
                       <div className="editor-panel-title">
-                        <span>Properties</span>
-                        <small>Selected clip + YouTube draft</small>
+                        <span>Inspector</span>
+                        <small>Drag timeline edges to trim</small>
                       </div>
 
                       {selectedClip ? (
                         <>
-                          <label className="editor-field">
-                            <span>Clip Name</span>
-                            <input
-                              value={selectedClip.title || ""}
-                              onChange={(e) => updateContentStudioClip(selectedClip.clip_id, { title: e.target.value })}
-                            />
-                          </label>
+                          <div className="clip-inspector-card">
+                            <span className="editor-kicker">Selected Clip</span>
+                            <b>{selectedClip.title || `Clip ${selectedIndex + 1}`}</b>
+                            <small>{isTop10 && selectedIndex < 10 ? `Top 10 slot #${10 - selectedIndex}` : isTop10 ? "Extra / solo draft" : "Solo clip"}</small>
+                          </div>
 
-                          <div className="editor-two-col">
-                            <label className="editor-field">
-                              <span>Trim Start</span>
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.1"
-                                value={selectedClip.trim_start || 0}
-                                onChange={(e) => updateContentStudioClip(selectedClip.clip_id, { trim_start: e.target.value })}
-                              />
-                            </label>
+                          <div className="trim-readout-grid">
+                            <div>
+                              <span>Start Trim</span>
+                              <b>{formatVideoTime(selectedClip.trim_start || 0)}</b>
+                            </div>
 
-                            <label className="editor-field">
-                              <span>Trim End</span>
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.1"
-                                value={selectedClip.trim_end || ""}
-                                onChange={(e) => updateContentStudioClip(selectedClip.clip_id, { trim_end: e.target.value })}
-                                placeholder="End"
-                              />
-                            </label>
+                            <div>
+                              <span>End Trim</span>
+                              <b>{formatVideoTime(Number(selectedClip.trim_end || 0) > Number(selectedClip.trim_start || 0) ? selectedClip.trim_end : getContentStudioClipDuration(selectedClip))}</b>
+                            </div>
+
+                            <div>
+                              <span>Final Length</span>
+                              <b>{formatVideoTime(getContentStudioEffectiveClipDuration(selectedClip))}</b>
+                            </div>
+                          </div>
+
+                          <div className="trim-help-box">
+                            Drag the left or right edge of the red clip on the timeline. You can only shorten the clip, never extend past the original source.
                           </div>
 
                           {isTop10 && (
@@ -4269,6 +5843,11 @@ function App() {
                             <b>Timeline Position</b>
                             <span>{selectedIndex >= 0 ? selectedIndex + 1 : "—"} of {sortedClips.length}</span>
                           </div>
+
+                          <div className="editor-property-actions">
+                            <button className="editor-mini-btn" type="button" onClick={() => splitContentStudioClip(selectedClip.clip_id)}>Split Clip</button>
+                            <button className="editor-mini-btn danger" type="button" onClick={() => removeContentStudioClipFromTimeline(selectedClip.clip_id)}>Remove</button>
+                          </div>
                         </>
                       ) : (
                         <p>No clip selected.</p>
@@ -4284,40 +5863,45 @@ function App() {
                         />
                       </label>
 
-                      <label className="editor-field">
-                        <span>YouTube Title</span>
-                        <input
-                          value={draft?.title || ""}
-                          onChange={(e) => updateContentStudioDraftField("title", e.target.value)}
-                        />
-                      </label>
+                      {isContentStudioPreviewConfirmed() ? (
+                        <div className="youtube-draft-panel">
+                          <div className="editor-panel-title">
+                            <span>YouTube Draft</span>
+                            <small>Unlocked after preview confirmation</small>
+                          </div>
 
-                      <label className="editor-field">
-                        <span>Description</span>
-                        <textarea
-                          value={draft?.description || ""}
-                          onChange={(e) => updateContentStudioDraftField("description", e.target.value)}
-                          rows="5"
-                        />
-                      </label>
+                          <label className="editor-field">
+                            <span>YouTube Title</span>
+                            <input
+                              value={draft?.title || ""}
+                              onChange={(e) => updateContentStudioDraftField("title", e.target.value)}
+                            />
+                          </label>
 
-                      <label className="editor-field">
-                        <span>Tags</span>
-                        <textarea
-                          value={draft?.tags || ""}
-                          onChange={(e) => updateContentStudioDraftField("tags", e.target.value)}
-                          rows="3"
-                        />
-                      </label>
+                          <label className="editor-field">
+                            <span>Description</span>
+                            <textarea
+                              value={draft?.description || ""}
+                              onChange={(e) => updateContentStudioDraftField("description", e.target.value)}
+                              rows="5"
+                            />
+                          </label>
 
-                      <label className="editor-field">
-                        <span>Thumbnail Plan</span>
-                        <textarea
-                          value={draft?.thumbnail_plan || ""}
-                          onChange={(e) => updateContentStudioDraftField("thumbnail_plan", e.target.value)}
-                          rows="3"
-                        />
-                      </label>
+                          <label className="editor-field">
+                            <span>Tags</span>
+                            <textarea
+                              value={draft?.tags || ""}
+                              onChange={(e) => updateContentStudioDraftField("tags", e.target.value)}
+                              rows="3"
+                            />
+                          </label>
+                        </div>
+                      ) : (
+                        <div className="youtube-locked-card">
+                          <b>YouTube Draft Locked</b>
+                          <span>Render and confirm the video preview first. This prevents upload/title work before the edit is actually approved.</span>
+                        </div>
+                      )}
                     </div>
                     </section>
 

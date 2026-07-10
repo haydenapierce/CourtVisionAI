@@ -1,7 +1,22 @@
+from datetime import date, timedelta
+import time
 from services.youtube_oauth import get_authenticated_service
 from services.youtube_service import get_all_channel_videos
 
 PERIOD_ORDER = ["lifetime", "365d", "90d", "28d", "7d"]
+
+
+def _latest_available_analytics_date():
+    return date.today() - timedelta(days=2)
+
+
+def _clamp_end_date(value):
+    try:
+        requested = date.fromisoformat(str(value)[:10])
+    except Exception:
+        requested = _latest_available_analytics_date()
+
+    return min(requested, _latest_available_analytics_date()).isoformat()
 
 
 def _header_index_map(response):
@@ -60,7 +75,17 @@ def query_youtube_analytics_report(
     if sort:
         request["sort"] = sort
 
-    return analytics.reports().query(**request).execute()
+    last_error = None
+
+    for attempt in range(3):
+        try:
+            return analytics.reports().query(**request).execute()
+        except Exception as error:
+            last_error = error
+            if attempt < 2:
+                time.sleep(0.75 * (attempt + 1))
+
+    raise last_error
 
 
 def fetch_channel_period_revenue(analytics, period_type, start_date, end_date):
@@ -255,7 +280,7 @@ def sync_youtube_revenue_periods(period_ranges, periods=None, videos=None):
 
         dates = period_ranges[period_type]
         start_date = dates["start_date"]
-        end_date = dates["end_date"]
+        end_date = _clamp_end_date(dates["end_date"])
 
         channel_rows.append(
             fetch_channel_period_revenue(

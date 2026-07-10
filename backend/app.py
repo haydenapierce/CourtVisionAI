@@ -12,12 +12,19 @@ from routes.revenue_forecast import router as revenue_forecast_router
 
 from routes.content_strategy import router as content_strategy_router
 from routes.dead_video_recovery import router as dead_video_recovery_router
+from routes.end_screen_optimizer import router as end_screen_optimizer_router
 
 from routes.studio_breakdowns import router as studio_breakdowns_router
 from routes.studio_intelligence import router as studio_intelligence_router
 
 from routes.content_studio import router as content_studio_router
 from routes.video_editor import router as video_editor_router
+from routes.community_automation import router as community_automation_router
+
+# Initialize the database once before FastAPI begins accepting requests.
+# This restores the reliable startup behavior and removes the background
+# /health gate that caused the frontend to remain at 1%.
+create_videos_table()
 
 app = FastAPI(title="CourtVision AI")
 
@@ -32,7 +39,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-create_videos_table()
 
 app.include_router(dashboard_router)
 app.include_router(idea_lab_router)
@@ -43,12 +49,16 @@ app.include_router(revenue_forecast_router)
 
 app.include_router(content_strategy_router)
 app.include_router(dead_video_recovery_router)
+app.include_router(end_screen_optimizer_router)
 
 app.include_router(studio_breakdowns_router)
 app.include_router(studio_intelligence_router)
 
 app.include_router(content_studio_router)
 app.include_router(video_editor_router)
+app.include_router(community_automation_router)
+
+
 
 
 @app.get("/")
@@ -66,9 +76,11 @@ def root():
             "Revenue Forecast",
             "Strategy Center",
             "Dead Video Recovery",
+            "End Screen Optimizer",
             "Studio Breakdowns",
             "Studio Intelligence",
             "Content Studio",
-            "Video Editor"
+            "Video Editor",
+            "Community Automation"
         ]
     }

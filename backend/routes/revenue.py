@@ -271,7 +271,7 @@ def build_revenue_checklist():
         "instructions": [
             "Revenue Tracker now uses synced YouTube Analytics API data only.",
             "Do not enter revenue manually.",
-            "Use the YouTube Revenue Sync buttons to refresh channel and video revenue.",
+            "Revenue, views, and RPM refresh automatically on startup.",
             "If a video is missing revenue, run a full sync and allow Analytics API lag to catch up."
         ]
     }
@@ -513,18 +513,23 @@ def youtube_private_revenue_adjustment():
 
 
 
+def latest_available_youtube_analytics_date():
+    # YouTube Analytics revenue normally lags Studio by 1-3 days.
+    # CourtVision targets the newest stable day instead of an old hardcoded date.
+    return date.today() - timedelta(days=2)
+
+
 def build_youtube_period_ranges(end_date_value="", lifetime_start_date="2022-10-09"):
-    today = date.today()
+    latest_available = latest_available_youtube_analytics_date()
 
     if end_date_value:
         try:
-            end = date.fromisoformat(end_date_value)
+            requested_end = date.fromisoformat(end_date_value)
+            end = min(requested_end, latest_available)
         except Exception:
-            end = today - timedelta(days=1)
+            end = latest_available
     else:
-        # YouTube Studio revenue is normally reported through the last completed day.
-        # Using yesterday keeps 7d/28d/90d/365d aligned with Studio ranges like Jun 14–20.
-        end = today - timedelta(days=1)
+        end = latest_available
 
     return {
         "lifetime": {
@@ -643,14 +648,46 @@ def parse_datetime_safe(value):
 
 
 def revenue_data_is_fresh(max_age_minutes=REVENUE_AUTO_SYNC_MAX_AGE_MINUTES):
+    """
+    Fast startup freshness check.
+
+    YouTube Analytics normally trails real time. If the newest saved Analytics
+    end date already reaches CourtVision's newest stable Analytics date, there
+    is nothing new to download, so startup can safely use the saved rows.
+
+    The timestamp fallback is retained for older sync-log formats that do not
+    include an end date.
+    """
     try:
         status = get_youtube_revenue_status() or {}
         latest = status.get("latest_sync") or {}
-        latest_sync_value = latest.get("synced_at") if isinstance(latest, dict) else latest
-        latest_sync = parse_datetime_safe(latest_sync_value)
         row_count = youtube_period_rows_count()
 
-        if row_count <= 0 or not latest_sync:
+        if row_count <= 0:
+            return False
+
+        latest_end_value = ""
+        latest_sync_value = ""
+
+        if isinstance(latest, dict):
+            latest_end_value = latest.get("end_date") or ""
+            latest_sync_value = latest.get("synced_at") or ""
+        else:
+            latest_sync_value = latest
+
+        if latest_end_value:
+            try:
+                latest_end = date.fromisoformat(str(latest_end_value)[:10])
+                newest_stable_date = latest_available_youtube_analytics_date()
+
+                if latest_end >= newest_stable_date:
+                    return True
+            except Exception:
+                pass
+
+        latest_sync = parse_datetime_safe(latest_sync_value)
+
+        if not latest_sync or max_age_minutes <= 0:
             return False
 
         return datetime.now() - latest_sync <= timedelta(minutes=max_age_minutes)
@@ -666,8 +703,17 @@ def revenue_data_is_fresh(max_age_minutes=REVENUE_AUTO_SYNC_MAX_AGE_MINUTES):
 _AUTO_REVENUE_SYNC_STATE = {
     "revenue_sync_running": False,
     "last_revenue_sync": "",
-    "last_revenue_sync_result": None
+    "last_revenue_sync_result": None,
+    "stage": "idle",
+    "progress": 0,
+    "message": "Waiting",
 }
+
+
+def _set_revenue_sync_stage(stage, progress, message):
+    _AUTO_REVENUE_SYNC_STATE["stage"] = stage
+    _AUTO_REVENUE_SYNC_STATE["progress"] = int(max(0, min(100, progress)))
+    _AUTO_REVENUE_SYNC_STATE["message"] = message
 
 
 @router.post("/revenue/youtube/auto-sync")
@@ -717,17 +763,29 @@ def auto_sync_youtube_revenue(force: bool = False):
         }
 
     _AUTO_REVENUE_SYNC_STATE["revenue_sync_running"] = True
+    _set_revenue_sync_stage("starting", 5, "Starting YouTube Analytics sync")
 
     try:
-        if _AUTO_REVENUE_SYNC_STATE.get("last_revenue_sync_result") and not force:
-            result = _AUTO_REVENUE_SYNC_STATE["last_revenue_sync_result"]
-        else:
-            result = sync_youtube_revenue(sync_type="auto", periods=["28d", "7d"])
+        sync_periods = ["lifetime", "365d", "90d", "28d", "7d"]
+        _set_revenue_sync_stage("analytics", 25, "Fetching the newest available Analytics periods")
+        result = sync_youtube_revenue(sync_type="auto", periods=sync_periods)
+        _set_revenue_sync_stage("database", 90, "Saving revenue, views, and RPM")
 
         _AUTO_REVENUE_SYNC_STATE["last_revenue_sync"] = datetime.now().isoformat(timespec="seconds")
         _AUTO_REVENUE_SYNC_STATE["last_revenue_sync_result"] = result
 
+        REVENUE_RUNTIME_CACHE["summary_created_at"] = None
+        REVENUE_RUNTIME_CACHE["summary_payload"] = None
+        REVENUE_RUNTIME_CACHE["status_created_at"] = None
+        REVENUE_RUNTIME_CACHE["status_payload"] = None
+
         inner_ok = bool(result.get("ok", False)) if isinstance(result, dict) else False
+
+        _set_revenue_sync_stage(
+            "complete" if inner_ok else "error",
+            100 if inner_ok else 0,
+            "Revenue sync complete" if inner_ok else result.get("message", "Revenue sync failed")
+        )
 
         return {
             "ok": inner_ok,
@@ -740,6 +798,7 @@ def auto_sync_youtube_revenue(force: bool = False):
         }
 
     except Exception as error:
+        _set_revenue_sync_stage("error", 0, str(error))
         _AUTO_REVENUE_SYNC_STATE["last_revenue_sync"] = datetime.now().isoformat(timespec="seconds")
         _AUTO_REVENUE_SYNC_STATE["last_revenue_sync_result"] = {
             "ok": False,
@@ -762,6 +821,9 @@ def auto_sync_youtube_revenue_status():
         "revenue_sync_running": _AUTO_REVENUE_SYNC_STATE["revenue_sync_running"],
         "last_revenue_sync": _AUTO_REVENUE_SYNC_STATE["last_revenue_sync"],
         "last_revenue_sync_result": _AUTO_REVENUE_SYNC_STATE["last_revenue_sync_result"],
+        "stage": _AUTO_REVENUE_SYNC_STATE["stage"],
+        "progress": _AUTO_REVENUE_SYNC_STATE["progress"],
+        "message": _AUTO_REVENUE_SYNC_STATE["message"],
         "status": get_youtube_revenue_status(),
         "summary": get_best_revenue_summary()
     }
