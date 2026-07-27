@@ -1,4 +1,7 @@
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
+import threading
+import time
 from database.db import (
     get_best_channel_revenue_entries,
     get_best_video_revenue_entries,
@@ -11,6 +14,10 @@ from database.db import (
 router = APIRouter()
 
 MIN_TREND_VIEWS = 500
+
+_REVENUE_FORECAST_CACHE = {"created_at": 0.0, "payload": None}
+_REVENUE_FORECAST_CACHE_SECONDS = 300
+_REVENUE_FORECAST_LOCK = threading.Lock()
 
 
 def safe_float(value):
@@ -107,51 +114,61 @@ def has_enough_views_for_trend(video):
     return safe_int(video.get("views")) >= MIN_TREND_VIEWS
 
 
-def read_video_money(video):
-    """
-    Pull real synced lifetime revenue/RPM for the card.
-    Supports all key names used by Revenue Tracker / YouTube Analytics helpers.
-    """
-    try:
-        money = get_best_revenue_for_video(video, "lifetime") or {}
-    except TypeError:
-        money = get_best_revenue_for_video(video) or {}
-    except Exception:
-        money = {}
+def build_lifetime_revenue_lookup(entries):
+    """Build one video-id lookup from the already loaded Revenue Tracker rows."""
+    lookup = {}
+    for entry in entries or []:
+        if normalize_period(entry.get("period_type")) != "lifetime":
+            continue
+        video_id = str(entry.get("video_id") or "").strip()
+        if not video_id:
+            continue
+        views = safe_int(entry.get("views"))
+        revenue = safe_float(entry.get("amount") or entry.get("estimated_revenue"))
+        rpm = safe_float(entry.get("rpm"))
+        if rpm <= 0 and revenue > 0 and views > 0:
+            rpm = (revenue / views) * 1000
+        lookup[video_id] = {
+            "total_revenue": revenue,
+            "estimated_revenue": revenue,
+            "average_rpm": rpm,
+            "rpm": rpm,
+            "source": entry.get("source", "youtube_analytics_api_revenue_tracker")
+        }
+    return lookup
+
+
+def read_video_money(video, revenue_lookup=None):
+    """Read money from the bulk lookup; never perform one SQLite query per video."""
+    video_id = str(video.get("video_id") or "").strip()
+    money = (revenue_lookup or {}).get(video_id, {})
 
     revenue = safe_float(
         money.get("total_revenue")
-        or money.get("synced_revenue")
         or money.get("estimated_revenue")
-        or money.get("amount")
         or video.get("synced_revenue")
         or video.get("estimated_revenue")
         or video.get("yt_estimated_revenue")
         or video.get("manual_revenue")
     )
-
     rpm = safe_float(
         money.get("average_rpm")
-        or money.get("synced_rpm")
         or money.get("rpm")
-        or money.get("estimated_rpm")
         or video.get("synced_rpm")
         or video.get("estimated_rpm")
         or video.get("yt_estimated_rpm")
         or video.get("manual_rpm")
     )
-
     views = safe_int(video.get("views"))
     if rpm <= 0 and revenue > 0 and views > 0:
         rpm = (revenue / views) * 1000
-
     return money, revenue, rpm
 
 
-@router.get("/revenue-forecast")
-def revenue_forecast():
+def _build_revenue_forecast():
     channel_entries = get_best_channel_revenue_entries()
     video_entries = get_best_video_revenue_entries()
+    revenue_lookup = build_lifetime_revenue_lookup(video_entries)
     summary = get_best_revenue_summary()
     channel_rpm = safe_float(get_best_channel_rpm())
     videos = get_saved_videos()
@@ -193,7 +210,7 @@ def revenue_forecast():
         if views < MIN_TREND_VIEWS:
             continue
 
-        money, revenue, rpm = read_video_money(video)
+        money, revenue, rpm = read_video_money(video, revenue_lookup)
 
         if revenue <= 0 and rpm <= 0:
             continue
@@ -281,3 +298,42 @@ def revenue_forecast():
         "video_revenue_rows_available": len(video_entries),
         "video_forecast_rows_after_view_filter": len(video_forecasts)
     }
+
+
+@router.get("/revenue-forecast")
+def revenue_forecast():
+    now = time.monotonic()
+    cached = _REVENUE_FORECAST_CACHE.get("payload")
+    if cached is not None and now - _REVENUE_FORECAST_CACHE.get("created_at", 0) <= _REVENUE_FORECAST_CACHE_SECONDS:
+        result = dict(cached)
+        result["diagnostics"] = {**dict(result.get("diagnostics") or {}), "cached": True}
+        return result
+
+    with _REVENUE_FORECAST_LOCK:
+        now = time.monotonic()
+        cached = _REVENUE_FORECAST_CACHE.get("payload")
+        if cached is not None and now - _REVENUE_FORECAST_CACHE.get("created_at", 0) <= _REVENUE_FORECAST_CACHE_SECONDS:
+            result = dict(cached)
+            result["diagnostics"] = {**dict(result.get("diagnostics") or {}), "cached": True}
+            return result
+
+        started = time.monotonic()
+        try:
+            payload = _build_revenue_forecast()
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={
+                "error": "Revenue Forecast calculation failed",
+                "endpoint": "/revenue-forecast",
+                "stage": "build_revenue_forecast",
+                "technical_detail": str(exc),
+                "suggested_action": "Check Revenue Tracker database availability and retry startup."
+            })
+
+        payload["diagnostics"] = {
+            "cached": False,
+            "build_seconds": round(time.monotonic() - started, 3),
+            "source": "verified_revenue_tracker_rows"
+        }
+        _REVENUE_FORECAST_CACHE["created_at"] = time.monotonic()
+        _REVENUE_FORECAST_CACHE["payload"] = payload
+        return payload

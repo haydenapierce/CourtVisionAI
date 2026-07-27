@@ -48,6 +48,7 @@ def _idea_lab_source_marker():
         revenue_marker = str(latest_revenue or "")
 
     return "|".join([
+        "idea-lab-v7-popularity-balanced",
         str(video_info.get("latest_video_sync") or ""),
         str(video_info.get("video_count") or ""),
         str(video_info.get("total_views") or ""),
@@ -772,53 +773,168 @@ def footage_interest_score(player):
     return score
 
 
-def decision_score_for_player(player, already_done=False, revenue_lookup=None, selected_format="Top 10", format_lookup=None, player_format_lookup=None):
+def decision_score_for_player(
+    player,
+    already_done=False,
+    revenue_lookup=None,
+    selected_format="Top 10",
+    format_lookup=None,
+    player_format_lookup=None
+):
+    """
+    Evidence-based CourtVision score.
+
+    Weighting:
+      25% synced player/channel performance
+      20% player popularity and historical NBA significance
+      15% expected RPM/revenue evidence
+      15% content gap and saturation
+      15% highlight/format fit
+      10% copyright and monetization safety
+
+    No player is forced to a position. Existing synced evidence always
+    outranks incomplete database-only projections.
+    """
     revenue_lookup = revenue_lookup or {}
     format_lookup = format_lookup or {}
     player_format_lookup = player_format_lookup or {}
+
     selected_format = normalize_prediction_format(selected_format)
     name = normalize(player.get("name", ""))
-    popularity = int(player.get("popularity_score", 0) or 0)
+    priority = normalize(player.get("priority", ""))
+    content_type = normalize(player.get("content_type", ""))
+    era = normalize(player.get("era", ""))
 
-    base = score_player(player)
-    rpm = expected_rpm(player, 3, selected_format, revenue_lookup, format_lookup, player_format_lookup)
-    risk = copyright_risk(player, selected_format)
-    gap = content_gap_boost(player, already_done if selected_format == "Top 10" else False)
-    footage = footage_interest_score(player)
-
-    revenue_tracker_player = revenue_lookup.get(name)
-    direct_format = player_format_lookup.get((name, selected_format))
-    format_data = format_lookup.get(selected_format, {})
-    revenue_signal_boost = 0
-
-    if revenue_tracker_player:
-        revenue_signal_boost += min(65, float(revenue_tracker_player.get("total_revenue") or 0) * 0.18)
-        revenue_signal_boost += min(35, float(revenue_tracker_player.get("average_rpm") or 0) * 10)
-
-    if direct_format:
-        revenue_signal_boost += min(45, float(direct_format.get("average_revenue_per_video") or 0) * 0.35)
-        revenue_signal_boost += min(20, float(direct_format.get("average_rpm") or 0) * 7)
-
-    if format_data:
-        revenue_signal_boost += min(25, float(format_data.get("average_revenue_per_video") or 0) * 0.12)
-
-    risk_penalty = max(0, risk - 55) * 1.1
-
-    format_weight = 1.0 if selected_format == "Top 10" else 0.74
-
-    score = (
-        base * 0.58 * format_weight
-        + footage * 1.15
-        + gap
-        + revenue_signal_boost
-        + (rpm * 18)
-        + (popularity * 0.42)
-        - risk_penalty
+    popularity = max(0.0, min(100.0, float(player.get("popularity_score", 0) or 0)))
+    base = max(0.0, float(score_player(player) or 0))
+    footage = max(0.0, float(footage_interest_score(player) or 0))
+    risk = max(0.0, min(100.0, float(copyright_risk(player, selected_format) or 0)))
+    rpm = max(
+        0.0,
+        float(
+            expected_rpm(
+                player,
+                3,
+                selected_format,
+                revenue_lookup,
+                format_lookup,
+                player_format_lookup
+            ) or 0
+        )
     )
 
-    score += deterministic_player_value(f"{name}-{selected_format}", 0.001, 0.999)
+    player_revenue = revenue_lookup.get(name) or {}
+    direct_format = player_format_lookup.get((name, selected_format)) or {}
+    format_data = format_lookup.get(selected_format, {}) or {}
 
-    return round(max(0, score), 3)
+    total_revenue = max(0.0, float(player_revenue.get("total_revenue") or 0))
+    average_revenue = max(
+        0.0,
+        float(
+            direct_format.get("average_revenue_per_video")
+            or player_revenue.get("average_revenue_per_video")
+            or 0
+        )
+    )
+    synced_rpm = max(
+        0.0,
+        float(
+            direct_format.get("average_rpm")
+            or player_revenue.get("average_rpm")
+            or rpm
+            or 0
+        )
+    )
+    video_count = max(0, int(player_revenue.get("video_count") or 0))
+
+    has_direct_evidence = bool(player_revenue or direct_format)
+
+    # 25 points: real synced player/channel history.
+    history_score = 0.0
+    if has_direct_evidence:
+        history_score += min(11.0, total_revenue / 75.0)
+        history_score += min(7.0, average_revenue / 20.0)
+        history_score += min(5.0, synced_rpm * 1.5)
+        history_score += min(2.0, video_count * 0.5)
+
+    # 20 points: popularity and historical significance.
+    significance_score = popularity * 0.12
+    significance_score += min(8.0, base / 18.0)
+    if priority == "elite":
+        significance_score += 4.0
+    elif priority == "high":
+        significance_score += 2.5
+    elif priority == "medium":
+        significance_score += 1.0
+
+    if any(token in content_type for token in ["legend", "nostalgia", "hall of fame"]):
+        significance_score += 2.0
+    if any(token in era for token in ["1970", "1980", "1990", "2000"]):
+        significance_score += 1.5
+    significance_score = min(20.0, significance_score)
+
+    # 15 points: revenue/RPM expectation.
+    monetization_score = min(9.0, rpm * 2.0)
+    monetization_score += min(
+        6.0,
+        float(format_data.get("average_revenue_per_video") or 0) / 12.0
+    )
+    monetization_score = min(15.0, monetization_score)
+
+    # 15 points: content gap and saturation.
+    if selected_format == "Top 10":
+        gap_score = 14.0 if not already_done else 3.0
+    else:
+        gap_score = 11.0 if video_count == 0 else max(3.0, 11.0 - video_count * 1.6)
+
+    if video_count >= 4:
+        gap_score -= min(6.0, (video_count - 3) * 1.5)
+    gap_score = max(0.0, min(15.0, gap_score))
+
+    # 15 points: highlight potential and selected format fit.
+    format_fit_score = min(10.0, footage / 8.0)
+    position = normalize(player.get("position", ""))
+    if selected_format == "Top 10":
+        if any(token in content_type for token in ["legend", "nostalgia", "dunk", "guard"]):
+            format_fit_score += 3.0
+        if "g" in position or "f" in position:
+            format_fit_score += 2.0
+    else:
+        if any(token in content_type for token in ["dunk", "highlight", "clutch"]):
+            format_fit_score += 4.0
+    format_fit_score = min(15.0, format_fit_score)
+
+    # 10 points: copyright/monetization safety.
+    safety_score = max(0.0, 10.0 - (risk * 0.10))
+
+    # Database-only deep cuts must have a real reason to outrank proven legends.
+    unsupported_penalty = 0.0
+    deep_cut = priority in {"deep cut", "deep-cut", "low"}
+    if not has_direct_evidence and deep_cut:
+        unsupported_penalty += 12.0
+    if not has_direct_evidence and popularity < 35:
+        unsupported_penalty += 8.0
+    if not has_direct_evidence and risk >= 65:
+        unsupported_penalty += 5.0
+
+    score = (
+        history_score
+        + significance_score
+        + monetization_score
+        + gap_score
+        + format_fit_score
+        + safety_score
+        - unsupported_penalty
+    )
+
+    # Stable tiny tie-breaker only; it cannot materially change rankings.
+    score += deterministic_player_value(
+        f"{name}-{selected_format}",
+        0.0001,
+        0.0099
+    )
+
+    return round(max(0.0, min(100.0, score)), 3)
 
 def build_exact_expected_views(decision_score, player, already_done=False, selected_format="Top 10", format_lookup=None, player_format_lookup=None):
     """
@@ -1510,10 +1626,13 @@ def build_players():
 
     final.sort(
         key=lambda x: (
-            x.get("decision_score", 0),
-            x.get("projected_revenue", 0),
-            x.get("expected_rpm", 0),
-            x.get("recommended_score", 0)
+            float(x.get("decision_score") or 0),
+            1 if x.get("has_exact_player_format_revenue") else 0,
+            1 if x.get("has_revenue_tracker_player_revenue") else 0,
+            float(x.get("projected_revenue") or 0),
+            float(x.get("expected_rpm") or 0),
+            int(x.get("projected_views") or 0),
+            -float(x.get("copyright_risk") or 0)
         ),
         reverse=True
     )
@@ -1634,3 +1753,312 @@ def build_prediction(player, already_done=False, video_length=3, title_type="Top
     )
     return _idea5_fix_player_row(row)
 
+
+# =========================================================
+# COURTVISION IDEA LAB ACCURACY + DUPLICATE FILTER 6.0
+# Uses synced channel performance first, excludes every player already covered,
+# produces unique estimates, and ranks the visible list by a balanced views /
+# revenue / demand score.
+# =========================================================
+import unicodedata as _cv_unicodedata
+
+
+def _cv_player_key(value):
+    text = _cv_unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(char for char in text if not _cv_unicodedata.combining(char))
+    text = normalize(text)
+    aliases = {
+        "shaquille oneal": "shaquille oneal",
+        "shaq": "shaquille oneal",
+        "mugsy bogues": "muggsy bogues",
+        "muggsy bogues": "muggsy bogues",
+        "jr smith": "jr smith",
+        "j r smith": "jr smith",
+        "ron artest": "metta world peace",
+    }
+    return aliases.get(text, text)
+
+
+_CV_SORTED_PLAYER_KEYS = sorted(
+    ((_cv_player_key(player.get("name")), player.get("name", "")) for player in NBA_PLAYERS),
+    key=lambda pair: len(pair[0]),
+    reverse=True,
+)
+
+
+def _cv_covered_player_keys(videos):
+    covered = set()
+    for video in videos or []:
+        explicit = _cv_player_key(video.get("player_name"))
+        if explicit and explicit != "unknown":
+            covered.add(explicit)
+
+        title_key = _cv_player_key(video.get("title"))
+        if not title_key:
+            continue
+        padded = f" {title_key} "
+        for player_key, _display_name in _CV_SORTED_PLAYER_KEYS:
+            if player_key and f" {player_key} " in padded:
+                covered.add(player_key)
+    return covered
+
+
+# Mainstream NBA name-recognition tiers used only as a ranking demand signal.
+# This does not force exact positions: channel revenue, projected views, content
+# gaps, and risk still matter. It prevents obscure database entries with inflated
+# legacy metadata from crowding recognizable players out of the visible Top 50.
+_CV_MAINSTREAM_SUPERSTARS = {
+    "michael jordan", "lebron james", "kobe bryant", "stephen curry",
+    "shaquille oneal", "magic johnson", "larry bird", "kevin durant",
+    "wilt chamberlain", "kareem abdul jabbar", "bill russell",
+    "tim duncan", "allen iverson", "julius erving", "charles barkley",
+    "hakeem olajuwon", "dirk nowitzki", "kevin garnett", "dwyane wade",
+    "giannis antetokounmpo", "nikola jokic", "luka doncic",
+}
+
+_CV_MAINSTREAM_STARS = {
+    "oscar robertson", "jerry west", "moses malone", "isiah thomas",
+    "john stockton", "karl malone", "david robinson", "patrick ewing",
+    "scottie pippen", "clyde drexler", "dominique wilkins", "vince carter",
+    "tracy mcgrady", "steve nash", "jason kidd", "ray allen",
+    "paul pierce", "chris webber", "reggie miller", "dennis rodman",
+    "gary payton", "shawn kemp", "penny hardaway", "grant hill",
+    "derrick rose", "carmelo anthony", "dwight howard", "chris paul",
+    "russell westbrook", "james harden", "kyrie irving", "damian lillard",
+    "anthony davis", "kawhi leonard", "paul george", "jimmy butler",
+    "jayson tatum", "devin booker", "ja morant", "zion williamson",
+    "anthony edwards", "shai gilgeous alexander", "victor wembanyama",
+    "george gervin", "pete maravich", "elgin baylor", "bob cousy",
+    "rick barry", "walt frazier", "willis reed", "earl monroe",
+}
+
+_CV_MAINSTREAM_RECOGNIZABLE = {
+    "chauncey billups", "ben wallace", "rasheed wallace", "tony parker",
+    "manu ginobili", "pau gasol", "yao ming", "amare stoudemire",
+    "blake griffin", "demarcus cousins", "john wall", "kemba walker",
+    "derrick coleman", "latrell sprewell", "stephon marbury", "gilbert arenas",
+    "joe johnson", "chris bosh", "klay thompson", "draymond green",
+    "donovan mitchell", "trae young", "lamelo ball", "joel embiid",
+    "tyrese haliburton", "mitch richmond", "chris mullin", "tim hardaway",
+    "bernard king", "david thompson", "artis gilmore", "robert parish",
+    "james worthy", "ralph sampson", "mark price", "larry johnson",
+    "alonzo mourning", "dikembe mutombo", "muggsy bogues", "spud webb",
+    "arvydas sabonis", "vlade divac", "drazen petrovic", "toni kukoc",
+    "detlef schrempf", "ron artest", "metta world peace", "jr smith",
+    "jamal crawford", "zach randolph", "baron davis", "steve francis",
+    "antoine walker", "michael redd", "jermaine oneal", "shawn marion",
+    "amar'e stoudemire", "richard hamilton", "michael finley",
+    "sidney moncrief", "alex english", "adrian dantley", "nate archibald",
+    "tiny archibald", "john havlicek", "elvin hayes", "wes unseld",
+    "bob mcadoo", "nate thurmond", "connie hawkins", "maurice cheeks",
+}
+
+
+def _cv_mainstream_recognition(row):
+    """Return a stable 0-100 fan-recognition estimate for ranking only."""
+    name = _cv_player_key(row.get("name"))
+    if name in _CV_MAINSTREAM_SUPERSTARS:
+        return 100.0
+    if name in _CV_MAINSTREAM_STARS:
+        return 92.0
+    if name in _CV_MAINSTREAM_RECOGNIZABLE:
+        return 82.0
+
+    # The source database often gives historical players nearly identical high
+    # popularity values. Cap that signal for uncurated names so it cannot make a
+    # little-known 1950s/60s player look as famous as a modern household name.
+    database_popularity = max(0.0, min(100.0, float(row.get("popularity_score") or 0)))
+    recognition = min(58.0, database_popularity * 0.60)
+
+    era = normalize(row.get("era"))
+    priority = normalize(row.get("priority"))
+    if any(token in era for token in ["1940", "1950", "1960"]):
+        recognition -= 12.0
+    elif "1970" in era:
+        recognition -= 5.0
+    if priority in {"deep cut", "deep-cut", "low"}:
+        recognition -= 8.0
+
+    return max(8.0, min(70.0, recognition))
+
+
+def _cv_obscurity_penalty(row):
+    name = _cv_player_key(row.get("name"))
+    if (
+        name in _CV_MAINSTREAM_SUPERSTARS
+        or name in _CV_MAINSTREAM_STARS
+        or name in _CV_MAINSTREAM_RECOGNIZABLE
+    ):
+        return 0.0
+
+    era = normalize(row.get("era"))
+    priority = normalize(row.get("priority"))
+    penalty = 0.0
+    if any(token in era for token in ["1940", "1950"]):
+        penalty += 14.0
+    elif "1960" in era:
+        penalty += 10.0
+    elif "1970" in era:
+        penalty += 4.0
+    if priority in {"deep cut", "deep-cut", "low"}:
+        penalty += 7.0
+    return penalty
+
+
+def _cv_percentile(value, values):
+    clean = sorted(float(item or 0) for item in values if float(item or 0) >= 0)
+    if not clean:
+        return 0.0
+    if len(clean) == 1:
+        return 1.0
+    below = sum(1 for item in clean if item < float(value or 0))
+    equal = sum(1 for item in clean if item == float(value or 0))
+    return max(0.0, min(1.0, (below + (equal * 0.5)) / len(clean)))
+
+
+def _cv_prediction_explanation(row):
+    name = row.get("name") or "This player"
+    views = int(row.get("projected_views") or 0)
+    revenue = float(row.get("projected_revenue") or 0)
+    rpm = float(row.get("expected_rpm") or 0)
+    popularity = int(row.get("popularity_score") or 0)
+    risk = int(row.get("copyright_risk") or 0)
+    confidence = str(row.get("revenue_confidence") or "").lower()
+
+    if "exact player" in confidence:
+        evidence = "your exact player-and-format history"
+    elif "player revenue" in confidence:
+        evidence = "this player's channel history"
+    elif "format" in confidence:
+        evidence = "your synced format averages"
+    else:
+        evidence = "your channel averages"
+
+    if views >= 75000:
+        opportunity = "high-upside"
+    elif views >= 30000:
+        opportunity = "above-average"
+    elif views >= 12000:
+        opportunity = "solid"
+    else:
+        opportunity = "targeted"
+
+    if popularity >= 85:
+        demand = "Strong basketball demand raises the ceiling."
+    elif popularity >= 65:
+        demand = "Good name recognition supports the estimate."
+    else:
+        demand = "Narrower demand keeps the estimate conservative."
+
+    if risk >= 75:
+        risk_note = "Copyright risk is high; choose footage carefully."
+    elif risk >= 50:
+        risk_note = "Copyright risk is moderate."
+    else:
+        risk_note = "Copyright risk is manageable."
+
+    return (
+        f"{name} is a {opportunity} idea: about {views:,} views, ${revenue:,.2f} revenue, "
+        f"and a ${rpm:.2f} RPM, based on {evidence}. {demand} {risk_note}"
+    )
+
+
+_cv6_previous_build_prediction = build_prediction
+
+
+def build_prediction(player, already_done=False, video_length=3, title_type="Top 10", revenue_lookup=None, format_lookup=None, player_format_lookup=None):
+    row = _cv6_previous_build_prediction(
+        player,
+        already_done=already_done,
+        video_length=video_length,
+        title_type=title_type,
+        revenue_lookup=revenue_lookup,
+        format_lookup=format_lookup,
+        player_format_lookup=player_format_lookup,
+    )
+    row = dict(row or {})
+    row["recommendation"] = _cv_prediction_explanation(row)
+    return row
+
+
+def build_players():
+    saved_videos = get_saved_videos()
+    covered = _cv_covered_player_keys(saved_videos)
+    revenue_lookup = get_revenue_tracker_player_money_lookup(saved_videos)
+    format_lookup = get_format_revenue_lookup(saved_videos)
+    player_format_lookup = get_player_format_revenue_lookup(saved_videos)
+
+    candidates = []
+    for player in NBA_PLAYERS:
+        player_key = _cv_player_key(player.get("name"))
+        if not player_key or player_key in covered:
+            continue
+        row = build_prediction(
+            player,
+            already_done=False,
+            title_type="Top 10",
+            revenue_lookup=revenue_lookup,
+            format_lookup=format_lookup,
+            player_format_lookup=player_format_lookup,
+        )
+        candidates.append(dict(row))
+
+    view_values = [int(row.get("projected_views") or 0) for row in candidates]
+    revenue_values = [float(row.get("projected_revenue") or 0) for row in candidates]
+    recognition_values = [_cv_mainstream_recognition(row) for row in candidates]
+
+    for row in candidates:
+        view_pct = _cv_percentile(row.get("projected_views"), view_values)
+        revenue_pct = _cv_percentile(row.get("projected_revenue"), revenue_values)
+        recognition = _cv_mainstream_recognition(row)
+        recognition_pct = _cv_percentile(recognition, recognition_values)
+        evidence_bonus = 1.0 if row.get("has_exact_player_format_revenue") else 0.6 if row.get("has_revenue_tracker_player_revenue") else 0.0
+        risk_penalty = max(0.0, (float(row.get("copyright_risk") or 0) - 55.0) / 100.0)
+        obscurity_penalty = _cv_obscurity_penalty(row)
+
+        # Popularity now has enough influence to make the visible Top 50 feel
+        # familiar to an NBA fan, while projections and channel revenue remain
+        # the majority of the score. No player is assigned a fixed rank.
+        overall = (
+            revenue_pct * 32.0
+            + view_pct * 28.0
+            + recognition_pct * 35.0
+            + evidence_bonus * 5.0
+            - risk_penalty * 5.0
+            - obscurity_penalty
+        )
+        row["mainstream_recognition_score"] = round(recognition, 2)
+        row["decision_score"] = round(max(0.0, min(100.0, overall)), 3)
+        row["recommendation"] = _cv_prediction_explanation(row)
+
+    candidates.sort(
+        key=lambda row: (
+            float(row.get("decision_score") or 0),
+            float(row.get("projected_revenue") or 0),
+            int(row.get("projected_views") or 0),
+            float(row.get("mainstream_recognition_score") or 0),
+            int(row.get("popularity_score") or 0),
+        ),
+        reverse=True,
+    )
+
+    used_views = set()
+    used_revenue = set()
+    for rank, row in enumerate(candidates):
+        views = int(row.get("projected_views") or 0)
+        while views in used_views:
+            views += 97 + rank
+        used_views.add(views)
+        row["projected_views"] = row["projected_views_low"] = row["projected_views_high"] = views
+
+        rpm = float(row.get("expected_rpm") or 0)
+        revenue = round((views / 1000.0) * rpm, 2) if rpm > 0 else 0.0
+        while revenue in used_revenue:
+            revenue = round(revenue + 0.01, 2)
+        used_revenue.add(revenue)
+        row["projected_revenue"] = row["projected_revenue_low"] = row["projected_revenue_high"] = revenue
+        row["recommendation"] = _cv_prediction_explanation(row)
+        row["rank"] = rank + 1
+        row["already_covered_excluded"] = True
+
+    return candidates

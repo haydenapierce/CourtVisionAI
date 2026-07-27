@@ -1,15 +1,96 @@
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from collections import defaultdict
+from datetime import date, datetime
+from decimal import Decimal
+import math
+import threading
+import time
 
 from database.db import (
     get_saved_videos,
     get_best_revenue_for_video,
     get_best_player_revenue_summary,
-    get_best_channel_rpm
+    get_best_channel_rpm,
+    get_best_video_revenue_entries
 )
 from data.player_database import NBA_PLAYERS
 
 router = APIRouter()
+
+
+def make_json_safe(value):
+    """Convert database/calculation output into strict JSON-safe values.
+
+    Starlette serializes endpoint return values after the route function exits,
+    so NaN/Infinity or numpy/sqlite scalar values can otherwise produce a 500
+    outside the route's try/except block.
+    """
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else 0
+    if isinstance(value, Decimal):
+        number = float(value)
+        return number if math.isfinite(number) else 0
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): make_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [make_json_safe(item) for item in value]
+    if hasattr(value, "keys"):
+        try:
+            return {str(key): make_json_safe(value[key]) for key in value.keys()}
+        except Exception:
+            pass
+    if hasattr(value, "item"):
+        try:
+            return make_json_safe(value.item())
+        except Exception:
+            pass
+    try:
+        number = float(value)
+        if math.isfinite(number):
+            return number
+    except Exception:
+        pass
+    return str(value)
+
+
+
+
+STRATEGY_CACHE_SECONDS = 300
+_STRATEGY_CACHE = {"created_at": 0.0, "payload": None}
+_STRATEGY_BUILD_LOCK = threading.Lock()
+
+
+def get_lifetime_revenue_lookup():
+    """Load synced lifetime revenue once instead of reopening SQLite per video."""
+    lookup = {}
+    try:
+        entries = get_best_video_revenue_entries() or []
+    except Exception:
+        entries = []
+
+    for entry in entries:
+        if str(entry.get("period_type") or "") != "lifetime":
+            continue
+        video_id = str(entry.get("video_id") or "").strip()
+        if not video_id:
+            continue
+        views = safe_int(entry.get("views"))
+        revenue = safe_float(entry.get("amount") or entry.get("estimated_revenue"))
+        rpm = safe_float(entry.get("rpm"))
+        if rpm <= 0 and revenue > 0 and views > 0:
+            rpm = (revenue / views) * 1000
+        lookup[video_id] = {
+            "total_revenue": round(revenue, 2),
+            "average_rpm": round(rpm, 2),
+            "entries": 1 if revenue > 0 or rpm > 0 or views > 0 else 0,
+            "source": entry.get("source", "youtube_analytics_api_revenue_tracker"),
+        }
+    return lookup
 
 
 def safe_float(value):
@@ -104,8 +185,12 @@ def get_video_era(video):
     return "Unknown"
 
 
-def enrich_video(video):
-    manual = get_best_revenue_for_video(video)
+def enrich_video(video, revenue_lookup=None):
+    video_id = str(video.get("video_id") or "").strip()
+    # Startup routes must never fall back to one SQLite query per video.
+    # The bulk lookup already contains all verified lifetime rows. Videos
+    # without a row legitimately receive zero synced revenue.
+    manual = (revenue_lookup or {}).get(video_id) or {}
 
     views = safe_int(video.get("views"))
     revenue = safe_float(manual.get("total_revenue"))
@@ -455,7 +540,8 @@ def build_ai_channel_brain_2(enriched, player_rows, era_analysis, format_analysi
     channel_rpm = safe_float(get_best_channel_rpm())
 
     player_opportunities = saturation.get("underused_players", [])
-    top_gap = content_gaps.get("top_gaps", [None])[0]
+    top_gaps = content_gaps.get("top_gaps") or []
+    top_gap = top_gaps[0] if top_gaps else None
     best_era = era_analysis.get("best_era")
     best_format = format_analysis.get("best_format")
 
@@ -520,16 +606,61 @@ def build_ai_channel_brain_2(enriched, player_rows, era_analysis, format_analysi
         "best_era": best_era,
         "best_format": best_format,
         "top_content_gap": top_gap,
-        "overused_warning": saturation.get("overused_players", [None])[0],
-        "underused_opportunity": saturation.get("underused_players", [None])[0],
+        "overused_warning": (saturation.get("overused_players") or [None])[0],
+        "underused_opportunity": (saturation.get("underused_players") or [None])[0],
         "action_plan": action_plan
     }
 
 
+
+
+def build_player_revenue_summary_from_enriched(enriched):
+    """Aggregate player revenue from already-enriched rows in one pass."""
+    grouped = defaultdict(list)
+    for row in enriched:
+        grouped[row.get("player", "Unknown") or "Unknown"].append(row)
+
+    result = []
+    for player, rows in grouped.items():
+        total_videos = len(rows)
+        total_views = sum(safe_int(row.get("views")) for row in rows)
+        total_revenue = round(sum(safe_float(row.get("synced_revenue")) for row in rows), 2)
+        synced_rows = [
+            row for row in rows
+            if safe_float(row.get("synced_revenue")) > 0 or safe_float(row.get("synced_rpm")) > 0
+        ]
+        rpm_values = [
+            safe_float(row.get("synced_rpm"))
+            for row in synced_rows
+            if safe_float(row.get("synced_rpm")) > 0
+        ]
+        synced_count = len(synced_rows)
+        result.append({
+            "player": player,
+            "total_videos": total_videos,
+            "synced_revenue_videos": synced_count,
+            "total_views": total_views,
+            "total_revenue": total_revenue,
+            "average_revenue": round(total_revenue / synced_count, 2) if synced_count else 0,
+            "average_rpm": round(sum(rpm_values) / len(rpm_values), 2) if rpm_values else 0,
+        })
+
+    result.sort(
+        key=lambda row: (
+            safe_float(row.get("total_revenue")),
+            safe_int(row.get("total_views")),
+            safe_int(row.get("total_videos")),
+        ),
+        reverse=True,
+    )
+    return result
+
+
 def build_strategy_intelligence():
     videos = get_saved_videos()
-    enriched = [enrich_video(video) for video in videos]
-    player_rows = get_best_player_revenue_summary(videos)
+    revenue_lookup = get_lifetime_revenue_lookup()
+    enriched = [enrich_video(video, revenue_lookup) for video in videos]
+    player_rows = build_player_revenue_summary_from_enriched(enriched)
 
     era_analysis = build_era_analysis(enriched)
     format_analysis = build_format_analysis(enriched)
@@ -589,7 +720,53 @@ def build_strategy_intelligence():
 
 @router.get("/strategy-intelligence")
 def strategy_intelligence():
-    return build_strategy_intelligence()
+    now = time.monotonic()
+    cached = _STRATEGY_CACHE.get("payload")
+    if cached is not None and now - float(_STRATEGY_CACHE.get("created_at") or 0) <= STRATEGY_CACHE_SECONDS:
+        response = dict(cached)
+        response["diagnostics"] = {**dict(response.get("diagnostics") or {}), "cached": True}
+        return JSONResponse(content=response)
+
+    with _STRATEGY_BUILD_LOCK:
+        now = time.monotonic()
+        cached = _STRATEGY_CACHE.get("payload")
+        if cached is not None and now - float(_STRATEGY_CACHE.get("created_at") or 0) <= STRATEGY_CACHE_SECONDS:
+            response = dict(cached)
+            response["diagnostics"] = {**dict(response.get("diagnostics") or {}), "cached": True}
+            return JSONResponse(content=response)
+        try:
+            started = time.monotonic()
+            payload = make_json_safe(build_strategy_intelligence())
+            payload["diagnostics"] = {
+                "source": "verified_saved_channel_data",
+                "build_seconds": round(time.monotonic() - started, 3),
+                "cached": False
+            }
+            _STRATEGY_CACHE["created_at"] = time.monotonic()
+            _STRATEGY_CACHE["payload"] = payload
+            return JSONResponse(content=payload)
+        except Exception as exc:
+            payload = {
+                "summary": {
+                    "total_videos": 0,
+                    "videos_with_synced_revenue": 0,
+                    "manual_channel_rpm": 0,
+                    "era_count": 0,
+                    "format_count": 0,
+                    "content_gap_count": 0,
+                    "overused_player_count": 0,
+                    "underused_player_count": 0
+                },
+                "era_analysis": {"rankings": [], "best_era": None, "insights": []},
+                "format_analysis": {"rankings": [], "best_format": None, "insights": []},
+                "content_gap_detector": {"top_gaps": [], "total_gaps": 0},
+                "player_saturation_detector": {"underused_players": [], "overused_players": [], "summary": {}},
+                "ai_channel_brain_2": {},
+                "insights": ["Decision Engine data could not be rebuilt from the current saved rows during startup."],
+                "degraded": True,
+                "technical_detail": str(exc)
+            }
+            return JSONResponse(content=make_json_safe(payload), status_code=500)
 
 
 @router.get("/era-analysis")

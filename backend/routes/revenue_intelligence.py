@@ -94,6 +94,12 @@ def opportunity_score(video, channel_rpm):
     return min(score, 100)
 
 
+def canonical_video_format(value):
+    """CourtVision supports only Top 10 and Solo Highlight formats."""
+    normalized = str(value or "").strip().lower().replace("_", " ").replace("-", " ")
+    return "Top 10" if normalized in {"top 10", "top10"} else "Solo Highlight"
+
+
 def build_video_row(video, channel_rpm):
     manual = get_manual_revenue_for_video(video)
 
@@ -111,7 +117,7 @@ def build_video_row(video, channel_rpm):
         "title": video.get("title", ""),
         "video_id": video.get("video_id", ""),
         "player": video.get("player_name", "Unknown"),
-        "content_type": video.get("content_type", "Other"),
+        "content_type": canonical_video_format(video.get("content_type")),
         "views": views,
         "manual_revenue": round(revenue, 2),
         "manual_rpm": round(rpm, 2),
@@ -289,7 +295,7 @@ def revenue_intelligence():
     content_map = {}
 
     for v in enriched:
-        content_type = v["content_type"] or "Other"
+        content_type = canonical_video_format(v.get("content_type"))
 
         if content_type not in content_map:
             content_map[content_type] = {

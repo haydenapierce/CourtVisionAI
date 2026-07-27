@@ -2,6 +2,7 @@ import os
 import time
 from dotenv import dotenv_values
 from googleapiclient.discovery import build
+import httplib2
 
 BASE_DIR = os.path.dirname(
     os.path.dirname(
@@ -21,6 +22,7 @@ CHANNEL_HANDLE = env.get("CHANNEL_HANDLE", "nbatopten")
 
 _YOUTUBE_SERVICE = None
 _UPLOADS_PLAYLIST_CACHE = {}
+_CHANNEL_STATS_CACHE = {}
 
 
 def get_youtube_service():
@@ -34,13 +36,14 @@ def get_youtube_service():
             "youtube",
             "v3",
             developerKey=API_KEY,
-            cache_discovery=False
+            cache_discovery=False,
+            http=httplib2.Http(timeout=20),
         )
 
     return _YOUTUBE_SERVICE
 
 
-def _execute_with_retry(request, attempts=3):
+def _execute_with_retry(request, attempts=2):
     last_error = None
 
     for attempt in range(attempts):
@@ -49,9 +52,15 @@ def _execute_with_retry(request, attempts=3):
         except Exception as error:
             last_error = error
             if attempt < attempts - 1:
-                time.sleep(0.6 * (attempt + 1))
+                time.sleep(0.8 * (attempt + 1))
 
     raise last_error
+
+
+def get_cached_channel_stats(handle=CHANNEL_HANDLE):
+    """Return the most recent in-process channel response without network I/O."""
+    cached = _CHANNEL_STATS_CACHE.get(str(handle or CHANNEL_HANDLE).lower())
+    return dict(cached) if isinstance(cached, dict) else None
 
 
 def get_channel_stats_by_handle(handle=CHANNEL_HANDLE):
@@ -62,6 +71,9 @@ def get_channel_stats_by_handle(handle=CHANNEL_HANDLE):
         forHandle=handle
     )
     response = _execute_with_retry(response)
+
+    if isinstance(response, dict):
+        _CHANNEL_STATS_CACHE[str(handle or CHANNEL_HANDLE).lower()] = response
 
     return response
 

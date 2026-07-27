@@ -220,6 +220,10 @@ def classify_recovery(video, money, channel_rpm):
     player = video.get("player_name", "Unknown")
     expected_views = expected_views_for_age(video)
 
+    copyright_revenue_ceiling = max(5.0, views * 0.00005)
+    if views >= 50000 and revenue <= copyright_revenue_ceiling:
+        return "Likely Copyright Revenue Loss", "High views with almost no synced revenue. Review the YouTube copyright and monetization status before remaking it."
+
     if views >= 100000 and rpm > 0 and rpm < max(1, channel_rpm * 0.55 if channel_rpm else 1):
         return "Revenue Leak", "High views but weak RPM. Check monetization, copyright, title safety, and ad suitability."
 
@@ -288,7 +292,9 @@ def build_video_row(video, channel_rpm, money_lookup=None):
         "estimated_revenue_if_50k_views": estimated_revenue_if_50k_views,
         "estimated_revenue_if_100k_views": estimated_revenue_if_100k_views,
         "projected_new_views": projected_new_views,
-        "projected_new_revenue": projected_new_revenue
+        "projected_new_revenue": projected_new_revenue,
+        "likely_copyrighted": bool(views >= 50000 and revenue <= max(5.0, views * 0.00005)),
+        "copyright_signal": "High views / near-zero synced revenue" if views >= 50000 and revenue <= max(5.0, views * 0.00005) else ""
     }
 
 
@@ -431,6 +437,7 @@ def dead_video_recovery():
         "remake_and_reupload_candidates": remake_and_reupload[:25],
         "high_rpm_low_reach": high_rpm_low_reach[:25],
         "revenue_leaks": revenue_leaks[:25],
+        "copyright_suspects": sorted([row for row in rows if row.get("likely_copyrighted")], key=lambda row: (-safe_int(row.get("views")), safe_float(row.get("manual_revenue")))),
         "all_scored_videos": rows,
         "insights": insights,
         "recommendations": recommendations

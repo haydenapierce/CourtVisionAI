@@ -150,6 +150,8 @@ def _canonical_post_type(value):
         return "Throwback / History Post"
     if "question" in text or "community" in text or "subscribers" in text or "donations" in text or "comment below" in text:
         return "Community Question"
+    if "favorite play" in text or "disagree" in text or "top 10 follow" in text or "post upload" in text:
+        return "Top 10 Follow-Up Poll"
     if "debate" in text or "finals" in text or "who will win" in text or "who’s winning" in text or "could" in text or "better" in text:
         return "Player Debate"
     return "Next Upload Poll"
@@ -625,6 +627,9 @@ def _post_copy(post_type, candidate, options, locked_winner=""):
     format_name = candidate.get("format", "Top 10 Plays")
     if post_type == "Next Upload Poll":
         return f"Which player deserves a {format_name} video next?", options, f"Next Upload Poll: {format_name}"
+    if post_type == "Top 10 Follow-Up Poll":
+        video_title = candidate.get("existing_video", {}).get("title") or f"{player} Top 10"
+        return f"After watching {video_title}, which part stood out most — and did you disagree with any ranking?", ["The #1 play", "A different top-three play", "The rankings were right", "I would change the order"], "Top 10 Follow-Up Poll"
     if post_type == "Player Debate":
         debate_options = options[:2] if len(options) >= 2 else [player, "Another legend"]
         return f"Who had the better highlight reel: {debate_options[0]} or {debate_options[1]}?", debate_options, "Player Debate"
@@ -641,7 +646,7 @@ def _post_copy(post_type, candidate, options, locked_winner=""):
 
 def _prediction_for_type(post_type, learning, history):
     same_type = [row for row in history if row.get("post_type") == post_type]
-    poll_type = post_type in ("Next Upload Poll", "Player Debate")
+    poll_type = post_type in ("Next Upload Poll", "Player Debate", "Top 10 Follow-Up Poll")
     if same_type:
         votes = _average(same_type, "votes") if poll_type else 0
         likes = _average(same_type, "likes")
@@ -659,7 +664,7 @@ def _prediction_for_type(post_type, learning, history):
 
 def _build_post(day, slot, post_type, candidate, options, priority, learning_reason, learning, history, locked_winner=""):
     post_text, post_options, title = _post_copy(post_type, candidate, options, locked_winner)
-    is_poll = post_type in ["Next Upload Poll", "Player Debate"]
+    is_poll = post_type in ["Next Upload Poll", "Player Debate", "Top 10 Follow-Up Poll"]
     prediction = _prediction_for_type(post_type, learning, history)
     confidence_percent = min(96, max(55, int(60 + min(35, len(history) / 2) + min(12, priority / 12))))
     return {
@@ -696,6 +701,71 @@ def _next_schedule_days(today):
     return days
 
 
+
+
+def _recent_top10_followup_candidate(videos, history):
+    logged_text = " ".join(_normalize(row.get("post_text") or row.get("topic") or row.get("linked_video_title")) for row in history[:100])
+    top10_videos = []
+    for video in videos:
+        title = str(video.get("title") or "")
+        content_type = _normalize(video.get("content_type"))
+        if "top 10" not in _normalize(title) and "top 10" not in content_type:
+            continue
+        video_key = _normalize(title)
+        if video_key and video_key in logged_text:
+            continue
+        top10_videos.append(video)
+    if not top10_videos:
+        return None
+    video = top10_videos[0]
+    return {
+        "player": video.get("player_name") or "NBA",
+        "format": "Top 10 Plays",
+        "priority": 95,
+        "reason": "Recent Top 10 upload follow-up.",
+        "era": "Mixed",
+        "existing_video": video,
+    }
+
+
+@router.get("/startup-summary")
+def get_community_automation_startup_summary():
+    """Return a fast, database-backed payload suitable for startup readiness.
+
+    The full Community Automation route can build recommendations and large
+    history payloads. Startup only needs enough saved state to render the tab;
+    the normal full refresh can continue after the dashboard opens.
+    """
+    history = get_community_post_history(50)
+    learning = get_community_post_learning()
+    latest = history[0] if history else None
+    return {
+        "startup_cached": True,
+        "summary": {
+            "next_recommended_post": None,
+            "best_time_today": learning.get("best_time") or "7:00 PM",
+            "community_momentum": min(100, round(len(history) + (learning.get("best_type_score") or 0) / 2, 1)),
+            "engagement_score": min(100, round(len(history) + (learning.get("best_type_score") or 0) / 2, 1)),
+            "logged_posts": len(history),
+            "total_posts": len(history),
+            "total_votes": sum(_safe_int(row.get("votes")) for row in history),
+            "total_likes": sum(_safe_int(row.get("likes")) for row in history),
+            "total_comments": sum(_safe_int(row.get("comments")) for row in history),
+            "best_learned_post_type": learning.get("best_post_type") or "Next Upload Poll",
+            "best_type": learning.get("best_post_type") or "Next Upload Poll",
+            "best_time": learning.get("best_time") or "7:00 PM",
+            "best_topic": (latest or {}).get("topic") or "Next Top 10 Poll",
+            "available_post_types": POST_TYPES,
+            "recommended_weekly_cadence": "3 posts per week",
+        },
+        "next_post": None,
+        "schedule": [],
+        "poll_bank": [],
+        "history": history,
+        "learning": learning,
+    }
+
+
 @router.get("")
 def get_community_automation():
     seeded_count = seed_community_history_if_needed()
@@ -718,12 +788,13 @@ def get_community_automation():
 
     schedule = []
     schedule_days = _next_schedule_days(today)
+    top10_followup = _recent_top10_followup_candidate(videos, history)
     for index, day in enumerate(schedule_days):
-        candidate = candidates[index % len(candidates)] if candidates else {"player": "NBA Legends", "format": "Top 10 Plays", "priority": 55, "reason": "Fallback recommendation.", "era": "Mixed"}
+        candidate = top10_followup if index == 0 and top10_followup else (candidates[index % len(candidates)] if candidates else {"player": "NBA Legends", "format": "Top 10 Plays", "priority": 55, "reason": "Fallback recommendation.", "era": "Mixed"})
         opt_count = int(learning.get("best_option_count") or 4)
         opt_count = min(5, max(2, opt_count))
         options = _poll_options(candidates, index, opt_count)
-        post_type = post_types[index % len(post_types)]
+        post_type = "Top 10 Follow-Up Poll" if index == 0 and top10_followup else post_types[index % len(post_types)]
         priority = min(98, candidate.get("priority", 55) + (learning.get("best_type_score") or 0) / 14)
         schedule.append(_build_post(day, learned_time if index == 0 else ["12:15 PM", "6:45 PM", "7:30 PM"][index % 3], post_type, candidate, options, priority, learning_reason, learning, history, locked_winner))
 

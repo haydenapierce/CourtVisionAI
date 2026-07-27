@@ -39,6 +39,14 @@ REVENUE_RUNTIME_CACHE = {
 REVENUE_RUNTIME_CACHE_SECONDS = 45
 
 
+def clear_revenue_runtime_cache():
+    """Clear short-lived revenue endpoint caches after synced rows change."""
+    REVENUE_RUNTIME_CACHE["summary_created_at"] = None
+    REVENUE_RUNTIME_CACHE["summary_payload"] = None
+    REVENUE_RUNTIME_CACHE["status_created_at"] = None
+    REVENUE_RUNTIME_CACHE["status_payload"] = None
+
+
 # YouTube Studio is currently showing revenue data through this date.
 # Use this as the default cutoff for your first "baseline" revenue entries.
 BASELINE_REVENUE_END_DATE = date(2026, 6, 17)
@@ -360,7 +368,6 @@ def revenue_setup():
 
 
 
-@router.get("/revenue/summary")
 def build_revenue_summary_uncached():
     return {
         "summary": get_best_revenue_summary()
@@ -477,7 +484,6 @@ def remove_video_revenue(entry_id: int):
 
 
 
-@router.get("/revenue/youtube/status")
 def build_youtube_revenue_status_uncached():
     return {
         "status": get_youtube_revenue_status()
@@ -572,7 +578,29 @@ def sync_youtube_revenue(start_date: str = "", end_date: str = "", sync_type: st
     )
 
     try:
-        result = sync_youtube_revenue_periods(period_ranges, periods=periods)
+        def progress_callback(period_type, completed, total, stage):
+            total = max(1, int(total or 1))
+            completed = max(0, int(completed or 0))
+            if stage == "fetching":
+                progress = 25 + int((completed / total) * 60)
+                _set_revenue_sync_stage(
+                    "analytics",
+                    progress,
+                    f"Fetching YouTube Analytics period {completed + 1}/{total}: {period_type}"
+                )
+            else:
+                progress = 25 + int((completed / total) * 60)
+                _set_revenue_sync_stage(
+                    "analytics",
+                    progress,
+                    f"Completed YouTube Analytics period {completed}/{total}: {period_type}"
+                )
+
+        result = sync_youtube_revenue_periods(
+            period_ranges,
+            periods=periods,
+            progress_callback=progress_callback
+        )
 
         channel_saved = save_youtube_revenue_period_rows(result.get("channel_rows", []))
         video_saved = save_youtube_revenue_period_rows(result.get("video_rows", []))
@@ -590,6 +618,8 @@ def sync_youtube_revenue(start_date: str = "", end_date: str = "", sync_type: st
             status="success",
             message=result.get("message", "")
         )
+
+        clear_revenue_runtime_cache()
 
         return {
             "ok": True,
@@ -729,10 +759,17 @@ def auto_sync_youtube_revenue(force: bool = False):
       If data is stale/missing, refresh the recent YouTube Analytics periods.
     """
     if _AUTO_REVENUE_SYNC_STATE["revenue_sync_running"]:
+        has_saved_rows = youtube_period_rows_count() > 0
         return {
-            "ok": True,
+            "ok": has_saved_rows,
             "already_running": True,
-            "message": "Revenue sync already running",
+            "warning": has_saved_rows,
+            "used_cached_data": has_saved_rows,
+            "message": (
+                "Revenue refresh is already running. Loaded existing verified Analytics rows."
+                if has_saved_rows else
+                "Revenue refresh is already running and no saved Analytics rows are available yet."
+            ),
             "last_result": _AUTO_REVENUE_SYNC_STATE.get("last_revenue_sync_result"),
             "status": get_youtube_revenue_status(),
             "summary": get_best_revenue_summary()
@@ -774,10 +811,7 @@ def auto_sync_youtube_revenue(force: bool = False):
         _AUTO_REVENUE_SYNC_STATE["last_revenue_sync"] = datetime.now().isoformat(timespec="seconds")
         _AUTO_REVENUE_SYNC_STATE["last_revenue_sync_result"] = result
 
-        REVENUE_RUNTIME_CACHE["summary_created_at"] = None
-        REVENUE_RUNTIME_CACHE["summary_payload"] = None
-        REVENUE_RUNTIME_CACHE["status_created_at"] = None
-        REVENUE_RUNTIME_CACHE["status_payload"] = None
+        clear_revenue_runtime_cache()
 
         inner_ok = bool(result.get("ok", False)) if isinstance(result, dict) else False
 
@@ -805,15 +839,27 @@ def auto_sync_youtube_revenue(force: bool = False):
             "error": str(error)
         }
 
+        has_saved_rows = youtube_period_rows_count() > 0
         return {
-            "ok": False,
+            "ok": has_saved_rows,
             "already_running": False,
-            "message": "Auto revenue sync failed",
+            "warning": has_saved_rows,
+            "used_cached_data": has_saved_rows,
+            "message": (
+                "Live YouTube Analytics refresh failed. Loaded existing verified Analytics rows."
+                if has_saved_rows else
+                "Auto revenue sync failed"
+            ),
             "error": str(error),
             "last_revenue_sync": _AUTO_REVENUE_SYNC_STATE["last_revenue_sync"],
             "status": get_youtube_revenue_status(),
             "summary": get_best_revenue_summary()
         }
+
+    finally:
+        # Always release the startup lock. Without this, one completed or failed
+        # sync leaves every later startup believing revenue is still running.
+        _AUTO_REVENUE_SYNC_STATE["revenue_sync_running"] = False
 
 @router.get("/revenue/youtube/auto-sync-status")
 def auto_sync_youtube_revenue_status():

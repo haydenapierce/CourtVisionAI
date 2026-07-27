@@ -1,18 +1,97 @@
 from fastapi import APIRouter
-from datetime import datetime
+from fastapi.responses import JSONResponse
+from datetime import date, datetime
 from collections import Counter
+from decimal import Decimal
+from bisect import bisect_right
+import math
 import re
+import threading
+import time
 
 from database.db import (
     get_saved_videos,
     get_best_revenue_for_video,
-    get_best_channel_rpm
+    get_best_channel_rpm,
+    get_best_video_revenue_entries
 )
 
 router = APIRouter()
 
+
+def make_json_safe(value):
+    """Convert database/calculation output into strict JSON-safe values.
+
+    Starlette serializes endpoint return values after the route function exits,
+    so NaN/Infinity or numpy/sqlite scalar values can otherwise produce a 500
+    outside the route's try/except block.
+    """
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else 0
+    if isinstance(value, Decimal):
+        number = float(value)
+        return number if math.isfinite(number) else 0
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): make_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [make_json_safe(item) for item in value]
+    if hasattr(value, "keys"):
+        try:
+            return {str(key): make_json_safe(value[key]) for key in value.keys()}
+        except Exception:
+            pass
+    if hasattr(value, "item"):
+        try:
+            return make_json_safe(value.item())
+        except Exception:
+            pass
+    try:
+        number = float(value)
+        if math.isfinite(number):
+            return number
+    except Exception:
+        pass
+    return str(value)
+
 END_SCREEN_CACHE = {"created_at": None, "payload": None}
-END_SCREEN_CACHE_SECONDS = 90
+END_SCREEN_CACHE_SECONDS = 300
+
+
+_END_SCREEN_BUILD_LOCK = threading.Lock()
+
+
+def get_lifetime_revenue_lookup():
+    """Load lifetime video revenue once for the entire optimizer build."""
+    lookup = {}
+    try:
+        entries = get_best_video_revenue_entries() or []
+    except Exception:
+        entries = []
+
+    for entry in entries:
+        if str(entry.get("period_type") or "") != "lifetime":
+            continue
+        video_id = str(entry.get("video_id") or "").strip()
+        if not video_id:
+            continue
+        views = safe_int(entry.get("views"))
+        revenue = safe_float(entry.get("amount") or entry.get("estimated_revenue"))
+        rpm = safe_float(entry.get("rpm"))
+        if rpm <= 0 and revenue > 0 and views > 0:
+            rpm = (revenue / views) * 1000
+        lookup[video_id] = {
+            "total_revenue": round(revenue, 2),
+            "estimated_revenue": round(revenue, 2),
+            "average_rpm": round(rpm, 2),
+            "rpm": round(rpm, 2),
+            "source": entry.get("source", "youtube_analytics_api_revenue_tracker")
+        }
+    return lookup
+
 
 STOP_WORDS = {
     "the", "a", "an", "and", "or", "of", "to", "in", "on", "vs", "at", "for",
@@ -95,6 +174,21 @@ def normalize_player(value):
     return re.sub(r"\s+", " ", player).strip()
 
 
+_RELATED_PLAYER_MAP = None
+
+
+def related_player_map():
+    global _RELATED_PLAYER_MAP
+    if _RELATED_PLAYER_MAP is None:
+        related = {}
+        for group in RELATED_PLAYER_GROUPS:
+            normalized = {normalize_player(name) for name in group}
+            for player in normalized:
+                related.setdefault(player, set()).update(normalized - {player})
+        _RELATED_PLAYER_MAP = related
+    return _RELATED_PLAYER_MAP
+
+
 def normalize_format(value, title=""):
     text = normalize(f"{value} {title}")
     if "top 10" in text or "top ten" in text:
@@ -141,15 +235,13 @@ def player_related_score(source_player, candidate_player):
     if source == candidate:
         return 26
 
-    for group in RELATED_PLAYER_GROUPS:
-        normalized_group = {normalize_player(name) for name in group}
-        if source in normalized_group and candidate in normalized_group:
-            return 13
+    if candidate in related_player_map().get(source, set()):
+        return 13
 
     return 0
 
 
-def get_video_money(video):
+def get_video_money(video, revenue_lookup=None):
     views = safe_int(video.get("views"))
 
     revenue = safe_float(video.get("yt_estimated_revenue") or video.get("estimated_revenue"))
@@ -165,12 +257,10 @@ def get_video_money(video):
             "source": "synced_video_row"
         }
 
-    try:
-        money = get_best_revenue_for_video(video) or {}
-    except TypeError:
-        money = get_best_revenue_for_video(video, "lifetime") or {}
-    except Exception:
-        money = {}
+    video_id = str(video.get("video_id") or "").strip()
+    # Never perform a per-video SQLite fallback during startup. The bulk
+    # lifetime lookup is authoritative; missing rows legitimately remain zero.
+    money = (revenue_lookup or {}).get(video_id) or {}
 
     revenue = safe_float(
         money.get("total_revenue")
@@ -193,8 +283,8 @@ def get_video_money(video):
     }
 
 
-def enrich_video(video):
-    money = get_video_money(video)
+def enrich_video(video, revenue_lookup=None):
+    money = get_video_money(video, revenue_lookup)
     title = video.get("title", "")
     player = video.get("player_name", "Unknown") or "Unknown"
     content_format = normalize_format(video.get("content_type", ""), title)
@@ -222,13 +312,12 @@ def enrich_video(video):
     }
 
 
-def percentile_score(value, values):
+def percentile_score(value, sorted_values):
     value = safe_float(value)
-    clean = sorted([safe_float(v) for v in values if safe_float(v) > 0])
-    if not clean or value <= 0:
+    if not sorted_values or value <= 0:
         return 0
-    below = len([v for v in clean if v <= value])
-    return min(100, max(0, round((below / len(clean)) * 100)))
+    below = bisect_right(sorted_values, value)
+    return min(100, max(0, round((below / len(sorted_values)) * 100)))
 
 
 def score_recommendation(source, candidate, rpm_values, revenue_values, views_values, channel_rpm):
@@ -256,16 +345,16 @@ def score_recommendation(source, candidate, rpm_values, revenue_values, views_va
         breakdown["topic_match"] = 100
         reasons.append(f"Same topic: {source.get('topic_bucket')}")
     else:
-        shared_keywords = set(source.get("keywords", [])) & set(candidate.get("keywords", []))
+        shared_keywords = source.get("_keyword_set", set()) & candidate.get("_keyword_set", set())
         keyword_points = min(10, len(shared_keywords) * 2)
         score += keyword_points
         breakdown["topic_match"] = min(100, keyword_points * 10)
         if shared_keywords:
             reasons.append("Similar title keywords")
 
-    rpm_percentile = percentile_score(candidate.get("rpm"), rpm_values)
-    revenue_percentile = percentile_score(candidate.get("revenue"), revenue_values)
-    views_percentile = percentile_score(candidate.get("views"), views_values)
+    rpm_percentile = safe_int(candidate.get("_rpm_percentile"))
+    revenue_percentile = safe_int(candidate.get("_revenue_percentile"))
+    views_percentile = safe_int(candidate.get("_views_percentile"))
 
     # Money-first scoring: revenue and RPM matter more than raw views because
     # the goal is to maximize long-term channel revenue, not just clicks.
@@ -386,7 +475,9 @@ def optimize_video(source, candidates, rpm_values, revenue_values, views_values,
 
 
 def build_end_screen_optimizer():
-    videos = [enrich_video(video) for video in get_saved_videos()]
+    saved_videos = get_saved_videos()
+    revenue_lookup = get_lifetime_revenue_lookup()
+    videos = [enrich_video(video, revenue_lookup) for video in saved_videos]
     videos = [video for video in videos if video.get("video_id")]
 
     # User-facing list should follow the channel upload timeline:
@@ -398,9 +489,20 @@ def build_end_screen_optimizer():
 
     channel_rpm = safe_float(get_best_channel_rpm())
 
-    rpm_values = [video.get("rpm", 0) for video in videos]
-    revenue_values = [video.get("revenue", 0) for video in videos]
-    views_values = [video.get("views", 0) for video in videos]
+    # Sort percentile inputs once. The previous implementation re-sorted all
+    # values for every source/candidate pair, causing startup to scale roughly
+    # cubically as the channel library grew.
+    rpm_values = sorted(safe_float(video.get("rpm", 0)) for video in videos if safe_float(video.get("rpm", 0)) > 0)
+    revenue_values = sorted(safe_float(video.get("revenue", 0)) for video in videos if safe_float(video.get("revenue", 0)) > 0)
+    views_values = sorted(safe_float(video.get("views", 0)) for video in videos if safe_float(video.get("views", 0)) > 0)
+
+    # Percentile values depend only on the candidate, so calculate them once
+    # instead of repeating three binary searches for every source/candidate pair.
+    for video in videos:
+        video["_rpm_percentile"] = percentile_score(video.get("rpm"), rpm_values)
+        video["_revenue_percentile"] = percentile_score(video.get("revenue"), revenue_values)
+        video["_views_percentile"] = percentile_score(video.get("views"), views_values)
+        video["_keyword_set"] = set(video.get("keywords", []))
 
     optimizations = [
         optimize_video(video, videos, rpm_values, revenue_values, views_values, channel_rpm)
@@ -483,21 +585,68 @@ def build_end_screen_optimizer():
     }
 
 
-@router.get("/end-screen-optimizer")
-def end_screen_optimizer():
+def _end_screen_optimizer_payload():
     now = datetime.now()
     cached_at = END_SCREEN_CACHE.get("created_at")
 
     if cached_at and END_SCREEN_CACHE.get("payload"):
         age = (now - cached_at).total_seconds()
         if age <= END_SCREEN_CACHE_SECONDS:
-            return END_SCREEN_CACHE["payload"]
+            response = dict(END_SCREEN_CACHE["payload"])
+            response["diagnostics"] = {**dict(response.get("diagnostics") or {}), "cached": True}
+            return response
 
-    payload = build_end_screen_optimizer()
-    END_SCREEN_CACHE["created_at"] = now
-    END_SCREEN_CACHE["payload"] = payload
-    return payload
+    with _END_SCREEN_BUILD_LOCK:
+        now = datetime.now()
+        cached_at = END_SCREEN_CACHE.get("created_at")
+        if cached_at and END_SCREEN_CACHE.get("payload"):
+            age = (now - cached_at).total_seconds()
+            if age <= END_SCREEN_CACHE_SECONDS:
+                response = dict(END_SCREEN_CACHE["payload"])
+                response["diagnostics"] = {**dict(response.get("diagnostics") or {}), "cached": True}
+                return response
 
+        started = time.monotonic()
+        payload = make_json_safe(build_end_screen_optimizer())
+        payload["diagnostics"] = {
+            "source": "verified_saved_channel_data",
+            "build_seconds": round(time.monotonic() - started, 3),
+            "cached": False
+        }
+        END_SCREEN_CACHE["created_at"] = now
+        END_SCREEN_CACHE["payload"] = payload
+        return payload
+
+
+
+
+@router.get("/end-screen-optimizer")
+def end_screen_optimizer():
+    try:
+        return JSONResponse(content=make_json_safe(_end_screen_optimizer_payload()))
+    except Exception as exc:
+        payload = {
+            "summary": {
+                "total_videos_scanned": 0,
+                "videos_ready": 0,
+                "videos_needing_more_matches": 0,
+                "overall_end_screen_score": 0,
+                "estimated_extra_views": 0,
+                "estimated_extra_revenue": 0,
+                "estimated_watch_minutes": 0,
+                "channel_rpm": 0,
+                "data_source": "youtube_analytics_api_revenue_tracker"
+            },
+            "top_opportunities": [],
+            "all_optimizations": [],
+            "insights": ["End Screen Optimizer could not be rebuilt from the current saved rows during startup."],
+            "recommendations": ["Retry startup after the backend database is available."],
+            "filters": {"players": [], "formats": []},
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "degraded": True,
+            "technical_detail": str(exc)
+        }
+        return JSONResponse(content=make_json_safe(payload), status_code=500)
 
 @router.get("/end-screen-optimizer/{video_id}")
 def end_screen_optimizer_for_video(video_id: str):

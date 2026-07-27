@@ -1,0 +1,36 @@
+{
+  "solo:30->30:none": {
+    "seconds_per_source_second": [
+      0.37942570192405445,
+      0.4807102046218088,
+      0.6867852702840241,
+      14.010604057788917,
+      744.6511373680898,
+      27.75579750628255
+    ],
+    "last_total_seconds": 884,
+    "updated_at": "2026-07-18T09:34:49"
+  },
+  "solo:30->60:auto": {
+    "seconds_per_source_second": [
+      67.28333103023517
+    ],
+    "last_total_seconds": 6609,
+    "updated_at": "2026-07-12T23:52:28"
+  },
+  "solo:30->60:none": {
+    "seconds_per_source_second": [
+      1.3210332569094623,
+      1.1524122141959174
+    ],
+    "last_total_seconds": 37,
+    "updated_at": "2026-07-23T22:24:43"
+  },
+  "solo:30->120:none": {
+    "seconds_per_source_second": [
+      2.1253818624371155
+    ],
+    "last_total_seconds": 68,
+    "updated_at": "2026-07-23T22:12:01"
+  }
+}

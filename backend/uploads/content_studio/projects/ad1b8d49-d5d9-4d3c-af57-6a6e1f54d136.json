@@ -1,0 +1,137 @@
+{
+  "project_id": "ad1b8d49-d5d9-4d3c-af57-6a6e1f54d136",
+  "project_type": "solo",
+  "project_name": "vince  dunk 2",
+  "created_at": "2026-07-13T00:46:51.283307",
+  "updated_at": "2026-07-13T00:58:35.129660",
+  "clip_count": 1,
+  "clips": [
+    {
+      "clip_id": "df1e6b9b-576e-4b2f-bb2f-14602833c6d6_split_1783921758515",
+      "original_filename": "Top 10 Posters Dunks - Vince Carter Career-1280x720-mp4a.mp4",
+      "stored_filename": "1_b5a1fd3f59774551866314ff040fe7ad.mp4",
+      "title": "Top 10 Posters Dunks Vince Carter Career 1280x720 mp4a Part 2 Part 1",
+      "file_path": "uploads/content_studio/clips/ad1b8d49-d5d9-4d3c-af57-6a6e1f54d136/1_b5a1fd3f59774551866314ff040fe7ad.mp4",
+      "preview_url": "/content-studio/preview/ad1b8d49-d5d9-4d3c-af57-6a6e1f54d136/1_b5a1fd3f59774551866314ff040fe7ad.mp4",
+      "order": 1,
+      "trim_start": 1.18,
+      "trim_end": 10.8,
+      "duration_seconds": 171.27,
+      "source_fps": 29.97,
+      "selected_for_top10": true,
+      "metadata": {
+        "title": "Top 10 Posters Dunks Vince Carter Career 1280x720 mp4a",
+        "description": "Top 10 Posters Dunks Vince Carter Career 1280x720 mp4a\n\nNBA highlight clip featuring one of the best basketball moments. Subscribe to NBATop10 for more NBA highlights, dunks, and classic basketball plays.",
+        "tags": "Top 10 Posters Dunks Vince Carter Career 1280x720 mp4a, NBA, NBA highlights, basketball highlights, NBA Top 10, NBATop10, best NBA plays, basketball, NBA history, classic NBA, NBA legends, poster dunk, slam dunk, basketball video, NBA dunks, greatest NBA plays",
+        "thumbnail_plan": "Use the main action frame, zoom on the player, increase contrast, darken background, and add bold readable highlight text."
+      },
+      "split_from_clip_id": "df1e6b9b-576e-4b2f-bb2f-14602833c6d6",
+      "frame_x": 0.0,
+      "frame_y": 0.0,
+      "frame_scale": 1.0
+    }
+  ],
+  "top10_draft": null,
+  "solo_draft": {
+    "title": "vince dunk 2",
+    "description": "vince dunk 2\n\nNBA highlight clip featuring one of the best basketball moments. Subscribe to NBATop10 for more NBA highlights, dunks, and classic basketball plays.",
+    "tags": "vince dunk 2, NBA, NBA highlights, basketball highlights, NBA Top 10, NBATop10, best NBA plays, basketball, NBA history, classic NBA, NBA legends, poster dunk, slam dunk, basketball video, NBA dunks, greatest NBA plays",
+    "thumbnail_plan": "Use the main action frame, zoom on the player, increase contrast, darken background, and add bold readable highlight text."
+  },
+  "status": "edited",
+  "preview_confirmed": false,
+  "render_status": "not_rendered",
+  "rendered_video": null,
+  "render_settings": {
+    "output_fps": 0,
+    "interpolation_mode": "auto",
+    "intro_enabled": false,
+    "intro_file": "intro.mp4 if available",
+    "clip_fade_in_seconds": 0.1,
+    "clip_fade_out_seconds": 0.1,
+    "outro_enabled": true,
+    "outro_file": "outro.png",
+    "outro_hold_seconds": 15,
+    "music_enabled": false,
+    "music_mode": "cycle_folder",
+    "music_folder": "music",
+    "number_overlay_enabled": false,
+    "number_overlay_position": "bottom-left",
+    "number_overlay_files": "backend/assets/countdown/10.png through 1.png"
+  },
+  "templates": {
+    "intro_exists": true,
+    "intro_path": "assets/branding/intro.mp4",
+    "intro_optional": true,
+    "outro_exists": true,
+    "outro_path": "assets/branding/outro.png",
+    "outro_required": true,
+    "legacy_template_folder": "uploads/content_studio/templates",
+    "asset_branding_folder": "assets/branding",
+    "asset_countdown_folder": "assets/countdown",
+    "countdown_overlays_ready": true,
+    "missing_countdown_overlays": [],
+    "countdown_overlays": {
+      "1": {
+        "exists": true,
+        "path": "assets/countdown/1.png"
+      },
+      "2": {
+        "exists": true,
+        "path": "assets/countdown/2.png"
+      },
+      "3": {
+        "exists": true,
+        "path": "assets/countdown/3.png"
+      },
+      "4": {
+        "exists": true,
+        "path": "assets/countdown/4.png"
+      },
+      "5": {
+        "exists": true,
+        "path": "assets/countdown/5.png"
+      },
+      "6": {
+        "exists": true,
+        "path": "assets/countdown/6.png"
+      },
+      "7": {
+        "exists": true,
+        "path": "assets/countdown/7.png"
+      },
+      "8": {
+        "exists": true,
+        "path": "assets/countdown/8.png"
+      },
+      "9": {
+        "exists": true,
+        "path": "assets/countdown/9.png"
+      },
+      "10": {
+        "exists": true,
+        "path": "assets/countdown/10.png"
+      }
+    },
+    "music_folder_exists": true,
+    "music_count": 0,
+    "music_files": [],
+    "solo_template": {
+      "intro": "off",
+      "clip": "uploaded MP4 or detected clip",
+      "fade": "0.10 sec in + 0.10 sec out",
+      "outro": "outro.png held for 15 seconds"
+    },
+    "top10_template": {
+      "intro": "intro.mp4 if present, otherwise skipped",
+      "clips": "10 ranked clips in saved drag order",
+      "number_overlay": "10.png through 1.png bottom-left for full clip",
+      "transition": "0.10 sec fade at clip start and end",
+      "outro": "outro.png held for 15 seconds",
+      "music": "cycles through music folder if music files exist"
+    }
+  },
+  "trashed": true,
+  "trashed_at": "2026-07-13T00:47:13",
+  "status_before_trash": "draft"
+}

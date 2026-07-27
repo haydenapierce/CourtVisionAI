@@ -21,7 +21,15 @@ def video_editor_status():
             "clip_fades_0_1_seconds": True,
             "outro_png_exports": True,
             "preview_generation": True,
-            "rendering": True
+            "rendering": True,
+            "custom_transport_controls": True,
+            "frame_stepping": True,
+            "live_timeline_scrubbing": True,
+            "draggable_trim_handles": True,
+            "physical_clip_resizing": True,
+            "keyboard_shortcuts": True,
+            "playback_speed_control": True,
+            "fullscreen_preview": True
         }
     }
 
@@ -38,8 +46,8 @@ def get_video_templates():
             "intro": False,
             "outro": True,
             "number_overlay": False,
-            "fade_in_seconds": 0.10,
-            "fade_out_seconds": 0.10,
+            "fade_in_seconds": 0.0,
+            "fade_out_seconds": 0.3,
             "music": False
         },
         "top10": {
@@ -47,8 +55,7 @@ def get_video_templates():
             "outro": True,
             "number_overlay": True,
             "number_overlay_position": "bottom-left",
-            "fade_in_seconds": 0.10,
-            "fade_out_seconds": 0.10,
+            "fade_rules": "Intro 0/0.3, #10 0.3/0.1, middle 0.1/0.1, #1 0.1/0.3, outro 0.3/2.0",
             "music": "optional if music folder has files"
         }
     }

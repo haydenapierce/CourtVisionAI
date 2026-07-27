@@ -1,0 +1,82 @@
+{
+  "project_id": "b84b0866-36ba-4f90-8f51-ff774f66c5f9",
+  "source": {
+    "filename": "source-20260725-204711-clipboard-image.png",
+    "file_path": "uploads\\content_studio\\thumbnail_builder\\b84b0866-36ba-4f90-8f51-ff774f66c5f9\\sources\\source-20260725-204711-clipboard-image.png",
+    "preview_url": "/thumbnail-builder/file/b84b0866-36ba-4f90-8f51-ff774f66c5f9/sources/source-20260725-204711-clipboard-image.png",
+    "created_at": "2026-07-25T20:47:11"
+  },
+  "template": null,
+  "versions": [],
+  "final": null,
+  "canvas": {
+    "scale": 1.0500000000000003,
+    "x": 61,
+    "y": -18,
+    "text_offset_x": -20,
+    "text_offset_y": -2,
+    "text_layers": [
+      {
+        "key": "line1",
+        "label": "Line 1",
+        "text": "vince",
+        "x": 0,
+        "y": 0,
+        "font_size": 94,
+        "min_font_size": 48,
+        "max_width": 430,
+        "gradient_start": "#ffffff",
+        "gradient_end": "#eeeeee",
+        "align": "center",
+        "vertical_scale": 1.24
+      },
+      {
+        "key": "line2",
+        "label": "Line 2",
+        "text": "carter",
+        "x": 0,
+        "y": 122,
+        "font_size": 94,
+        "min_font_size": 48,
+        "max_width": 430,
+        "gradient_start": "#ffffff",
+        "gradient_end": "#eeeeee",
+        "align": "center",
+        "vertical_scale": 1.24
+      },
+      {
+        "key": "line3",
+        "label": "Line 3",
+        "text": "poster dunk",
+        "x": 0,
+        "y": 244,
+        "font_size": 69,
+        "min_font_size": 38,
+        "max_width": 470,
+        "gradient_start": "#ffe733",
+        "gradient_end": "#f28a00",
+        "align": "center",
+        "vertical_scale": 1.24
+      },
+      {
+        "key": "line4",
+        "label": "Line 4",
+        "text": "on alonzo mourning",
+        "x": 0,
+        "y": 335,
+        "font_size": 47,
+        "min_font_size": 28,
+        "max_width": 440,
+        "gradient_start": "#ffffff",
+        "gradient_end": "#eeeeee",
+        "align": "center",
+        "vertical_scale": 1.24
+      }
+    ],
+    "text_group_x": 270,
+    "text_group_y": 54,
+    "text_group_rotation": -6
+  },
+  "updated_at": "2026-07-25T22:49:14",
+  "selected_version_id": ""
+}

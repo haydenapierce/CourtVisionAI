@@ -3,10 +3,13 @@ from collections import defaultdict, Counter
 from datetime import datetime, timedelta
 import unicodedata
 from functools import lru_cache
+from contextvars import ContextVar
 import threading
+import time
 
 from services.youtube_service import (
     get_channel_stats_by_handle,
+    get_cached_channel_stats,
     get_all_channel_videos,
     get_video_stats
 )
@@ -264,6 +267,53 @@ def get_lifetime_revenue_lookup():
 
     return lookup
 
+
+_ORIGINAL_GET_BEST_REVENUE_FOR_VIDEO = get_best_revenue_for_video
+_CHANNEL_BRAIN_REVENUE_LOOKUP = ContextVar("channel_brain_revenue_lookup", default=None)
+
+
+def get_best_revenue_for_video(video, period_type="lifetime"):
+    """Request-local bulk money lookup used by all legacy channel-brain layers.
+
+    The dashboard file contains many compatibility wrappers that resolve this
+    global name at runtime. Replacing the global with this context-aware helper
+    removes every hidden per-video SQLite call without rewriting those layers.
+    """
+    lookup = _CHANNEL_BRAIN_REVENUE_LOOKUP.get()
+    if lookup is not None and str(period_type or "lifetime") == "lifetime":
+        video_id = str((video or {}).get("video_id") or "").strip()
+        if video_id in lookup:
+            return lookup[video_id]
+        views = safe_int((video or {}).get("views"))
+        revenue = safe_float(
+            (video or {}).get("yt_estimated_revenue")
+            or (video or {}).get("estimated_revenue")
+            or (video or {}).get("synced_revenue")
+        )
+        rpm = safe_float(
+            (video or {}).get("yt_estimated_rpm")
+            or (video or {}).get("estimated_rpm")
+            or (video or {}).get("synced_rpm")
+        )
+        if rpm <= 0 and revenue > 0 and views > 0:
+            rpm = (revenue / views) * 1000
+        return {
+            "video_id": video_id,
+            "period_type": "lifetime",
+            "total_revenue": revenue,
+            "estimated_revenue": revenue,
+            "average_rpm": rpm,
+            "rpm": rpm,
+            "views": views,
+            "entries": 1 if revenue > 0 or rpm > 0 else 0,
+            "source": "synced_video_row" if revenue > 0 or rpm > 0 else "no_synced_revenue"
+        }
+    return _ORIGINAL_GET_BEST_REVENUE_FOR_VIDEO(video, period_type)
+
+
+_CHANNEL_BRAIN_CACHE = {"created_at": 0.0, "payload": None}
+_CHANNEL_BRAIN_CACHE_SECONDS = 300
+_CHANNEL_BRAIN_LOCK = threading.Lock()
 
 def attach_synced_money(video, money=None):
     """
@@ -1367,14 +1417,33 @@ def build_channel_brain_recommendations(videos):
 
 @router.get("/dashboard/stats")
 def dashboard_stats():
-    data = get_channel_stats_by_handle("nbatopten")
-    channel = data["items"][0]
-    totals = get_channel_totals()
+    """Return saved dashboard totals without waiting on YouTube.
+
+    Startup calls this endpoint before background sync begins. It must remain
+    fast and usable on slow, filtered, or offline networks. Fresh YouTube data
+    is collected by /dashboard/auto-sync; once that request succeeds, the
+    in-process channel cache enriches this response on the next frontend reload.
+    """
+    try:
+        totals = get_channel_totals() or {}
+    except Exception:
+        totals = {}
 
     try:
         revenue_summary = get_best_revenue_summary() or {}
     except Exception:
         revenue_summary = {}
+
+    try:
+        sync_info = get_latest_video_sync_info() or {}
+    except Exception:
+        sync_info = {}
+
+    cached_response = get_cached_channel_stats("nbatopten") or {}
+    cached_items = cached_response.get("items") or []
+    channel = cached_items[0] if cached_items else {}
+    channel_statistics = channel.get("statistics") or {}
+    channel_snippet = channel.get("snippet") or {}
 
     revenue_views = safe_int(
         (revenue_summary.get("channel_views_by_period") or {}).get("lifetime")
@@ -1382,20 +1451,38 @@ def dashboard_stats():
         or revenue_summary.get("lifetime_channel_views")
         or 0
     )
-
-    youtube_views = int(channel["statistics"].get("viewCount", 0))
+    saved_views = safe_int(
+        sync_info.get("total_views")
+        or totals.get("total_views")
+        or totals.get("views")
+        or 0
+    )
+    youtube_views = safe_int(channel_statistics.get("viewCount"))
+    database_videos = safe_int(
+        totals.get("total_videos")
+        or sync_info.get("video_count")
+        or 0
+    )
+    video_count = safe_int(channel_statistics.get("videoCount")) or database_videos
+    estimated_revenue = safe_float(
+        totals.get("estimated_revenue")
+        or totals.get("total_revenue")
+        or 0
+    )
 
     return {
-        "channel_name": channel["snippet"]["title"],
-        "subscribers": int(channel["statistics"].get("subscriberCount", 0)),
-        "total_views": revenue_views or youtube_views,
-        "youtube_total_views": youtube_views,
+        "channel_name": channel_snippet.get("title") or "NBATop10",
+        "subscribers": safe_int(channel_statistics.get("subscriberCount")),
+        "total_views": revenue_views or saved_views or youtube_views,
+        "youtube_total_views": youtube_views or saved_views,
         "revenue_tracker_total_views": revenue_views,
-        "video_count": int(channel["statistics"].get("videoCount", 0)),
-        "database_videos": totals["total_videos"],
-        "estimated_revenue": totals["estimated_revenue"],
-        "synced_revenue": totals["estimated_revenue"],
-        "manual_channel_rpm": get_best_channel_rpm()
+        "video_count": video_count,
+        "database_videos": database_videos,
+        "estimated_revenue": round(estimated_revenue, 2),
+        "synced_revenue": round(estimated_revenue, 2),
+        "manual_channel_rpm": safe_float(get_best_channel_rpm()),
+        "source": "saved_local_data",
+        "remote_channel_cache_ready": bool(channel)
     }
 
 
@@ -2565,11 +2652,55 @@ def build_channel_brain_recommendations(videos):
 
 @router.get("/dashboard/channel-brain")
 def channel_brain():
-    videos = get_saved_videos()
+    now = time.monotonic()
+    cached = _CHANNEL_BRAIN_CACHE.get("payload")
+    if cached is not None and now - _CHANNEL_BRAIN_CACHE.get("created_at", 0) <= _CHANNEL_BRAIN_CACHE_SECONDS:
+        result = dict(cached)
+        brain = dict(result.get("channel_brain") or {})
+        brain["diagnostics"] = {**dict(brain.get("diagnostics") or {}), "cached": True}
+        result["channel_brain"] = brain
+        return result
 
-    return {
-        "channel_brain": build_channel_brain_recommendations(videos)
-    }
+    with _CHANNEL_BRAIN_LOCK:
+        now = time.monotonic()
+        cached = _CHANNEL_BRAIN_CACHE.get("payload")
+        if cached is not None and now - _CHANNEL_BRAIN_CACHE.get("created_at", 0) <= _CHANNEL_BRAIN_CACHE_SECONDS:
+            result = dict(cached)
+            brain = dict(result.get("channel_brain") or {})
+            brain["diagnostics"] = {**dict(brain.get("diagnostics") or {}), "cached": True}
+            result["channel_brain"] = brain
+            return result
+
+        started = time.monotonic()
+        token = None
+        try:
+            videos = get_saved_videos() or []
+            revenue_lookup = get_lifetime_revenue_lookup()
+            token = _CHANNEL_BRAIN_REVENUE_LOOKUP.set(revenue_lookup)
+            brain = build_channel_brain_recommendations(videos)
+            brain["diagnostics"] = {
+                "cached": False,
+                "build_seconds": round(time.monotonic() - started, 3),
+                "videos_scanned": len(videos),
+                "bulk_revenue_rows": len(revenue_lookup),
+                "source": "verified_saved_channel_data"
+            }
+            payload = {"channel_brain": brain}
+            _CHANNEL_BRAIN_CACHE["created_at"] = time.monotonic()
+            _CHANNEL_BRAIN_CACHE["payload"] = payload
+            return payload
+        except Exception as exc:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=500, content={
+                "error": "Decision Engine recommendation calculation failed",
+                "endpoint": "/dashboard/channel-brain",
+                "stage": "build_channel_brain_recommendations",
+                "technical_detail": str(exc),
+                "suggested_action": "Check saved-video and Revenue Tracker rows, then retry startup."
+            })
+        finally:
+            if token is not None:
+                _CHANNEL_BRAIN_REVENUE_LOOKUP.reset(token)
 
 
 @router.get("/dashboard/top-videos")
@@ -5146,6 +5277,20 @@ def run_dashboard_sync_safely(force=False):
             "last_result": _AUTO_SYNC_STATE.get("last_dashboard_sync_result")
         }
 
+    # Always refresh channel-level statistics, even when the saved video data is
+    # fresh and the heavier video sync is skipped. The uploads playlist ID may
+    # already be cached, so get_all_channel_videos() is not guaranteed to call
+    # get_channel_stats_by_handle(). Without this explicit refresh, the
+    # in-process channel cache remains empty after a backend restart and the
+    # dashboard reports 0 subscribers.
+    channel_stats_error = None
+    try:
+        get_channel_stats_by_handle("nbatopten")
+    except Exception as error:
+        # A temporary YouTube/API failure must not discard otherwise valid
+        # locally saved dashboard data or prevent the normal video sync path.
+        channel_stats_error = str(error)
+
     if not force and dashboard_video_data_is_fresh():
         info = get_latest_video_sync_info()
         result = {
@@ -5155,7 +5300,9 @@ def run_dashboard_sync_safely(force=False):
             "message": "Dashboard/video data is already fresh. Loaded saved synced data.",
             "video_count": info.get("video_count", 0),
             "latest_video_sync": info.get("latest_video_sync", ""),
-            "total_views": info.get("total_views", 0)
+            "total_views": info.get("total_views", 0),
+            "channel_stats_refreshed": channel_stats_error is None,
+            "channel_stats_error": channel_stats_error
         }
 
         _AUTO_SYNC_STATE["last_dashboard_sync"] = datetime.now().isoformat(timespec="seconds")

@@ -8,3 +8,5 @@ python-dotenv
 pandas
 scikit-learn
 requests
+Pillow
+psd-tools

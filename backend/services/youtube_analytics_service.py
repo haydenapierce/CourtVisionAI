@@ -77,13 +77,21 @@ def query_youtube_analytics_report(
 
     last_error = None
 
-    for attempt in range(3):
+    # Google API clients otherwise inherit an effectively unbounded socket
+    # timeout. A single stalled Analytics request must never freeze startup.
+    try:
+        if getattr(analytics, "_http", None) is not None:
+            analytics._http.timeout = 25
+    except Exception:
+        pass
+
+    for attempt in range(2):
         try:
             return analytics.reports().query(**request).execute()
         except Exception as error:
             last_error = error
-            if attempt < 2:
-                time.sleep(0.75 * (attempt + 1))
+            if attempt < 1:
+                time.sleep(0.75)
 
     raise last_error
 
@@ -222,44 +230,18 @@ def fetch_video_period_revenue_batch(analytics, period_type, start_date, end_dat
         return output, []
 
     except Exception as error:
-        output = []
-        skipped = [{
+        # Never fall back to hundreds of sequential per-video API requests
+        # during startup. Existing verified database rows remain untouched and
+        # can be used until the next successful batch refresh.
+        return [], [{
             "period_type": period_type,
             "video_id": "__BATCH_QUERY__",
-            "title": "Batch dimensions=video query failed; used slow fallback.",
+            "title": "Batch dimensions=video query failed; retained saved rows.",
             "error": str(error)
         }]
 
-        for video in videos:
-            video_id = video.get("video_id")
-            title = video.get("title", "")
 
-            if not video_id:
-                continue
-
-            try:
-                output.append(
-                    fetch_single_video_period_revenue(
-                        analytics=analytics,
-                        period_type=period_type,
-                        start_date=start_date,
-                        end_date=end_date,
-                        video_id=video_id,
-                        title=title
-                    )
-                )
-            except Exception as inner_error:
-                skipped.append({
-                    "period_type": period_type,
-                    "video_id": video_id,
-                    "title": title,
-                    "error": str(inner_error)
-                })
-
-        return output, skipped
-
-
-def sync_youtube_revenue_periods(period_ranges, periods=None, videos=None):
+def sync_youtube_revenue_periods(period_ranges, periods=None, videos=None, progress_callback=None):
     """
     Pulls YouTube Studio-style estimated revenue/RPM.
 
@@ -274,9 +256,11 @@ def sync_youtube_revenue_periods(period_ranges, periods=None, videos=None):
     video_rows = []
     skipped_videos = []
 
-    for period_type in requested_periods:
-        if period_type not in period_ranges:
-            continue
+    available_periods = [period for period in requested_periods if period in period_ranges]
+
+    for period_index, period_type in enumerate(available_periods):
+        if progress_callback:
+            progress_callback(period_type, period_index, len(available_periods), "fetching")
 
         dates = period_ranges[period_type]
         start_date = dates["start_date"]
@@ -301,6 +285,9 @@ def sync_youtube_revenue_periods(period_ranges, periods=None, videos=None):
 
         video_rows.extend(period_video_rows)
         skipped_videos.extend(skipped)
+
+        if progress_callback:
+            progress_callback(period_type, period_index + 1, len(available_periods), "complete")
 
     return {
         "message": "Fetched YouTube Analytics revenue rows.",

@@ -10,7 +10,9 @@ CLIENT_SECRET_FILE = os.path.join(BASE_DIR, "client_secret.json")
 TOKEN_FILE = os.path.join(BASE_DIR, "token_youtube_analytics.json")
 
 SCOPES = [
-    "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/youtube",
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.force-ssl",
     "https://www.googleapis.com/auth/yt-analytics.readonly",
     "https://www.googleapis.com/auth/yt-analytics-monetary.readonly"
 ]
@@ -23,7 +25,15 @@ def get_credentials():
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
 
     if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+        except Exception:
+            creds = None
+            try:
+                if os.path.exists(TOKEN_FILE):
+                    os.remove(TOKEN_FILE)
+            except Exception:
+                pass
 
     if not creds or not creds.valid:
         if not os.path.exists(CLIENT_SECRET_FILE):
@@ -37,7 +47,11 @@ def get_credentials():
             SCOPES
         )
 
-        creds = flow.run_local_server(port=8080)
+        creds = flow.run_local_server(
+            port=8080,
+            access_type="offline",
+            prompt="consent"
+        )
 
     with open(TOKEN_FILE, "w", encoding="utf-8") as token:
         token.write(creds.to_json())
