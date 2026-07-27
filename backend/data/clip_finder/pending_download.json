@@ -1,0 +1,29 @@
+{
+  "pending_id": "a5e2bf40-f104-4c3a-b9e2-9944e7615071",
+  "project_id": "2b1d4b39-0d54-421e-a159-86f135e69dc0",
+  "result_id": "428d8679-a45f-4577-be8d-1ee15cf56406",
+  "video_id": "nJ8uc2iZjy4",
+  "title": "Top 10 Posters Dunks - Vince Carter Career",
+  "youtube_url": "https://www.youtube.com/watch?v=nJ8uc2iZjy4",
+  "status": "attached",
+  "message": "MP4 attached successfully. This source is complete and ready.",
+  "inbox_path": "C:\\Users\\hpier\\OneDrive\\Desktop\\CourtVisionAI\\data\\clip_finder\\inbox",
+  "baseline": {
+    "Top 10 Posters Dunks - Vince Carter Career-1280x720-mp4a.mp4": {
+      "size": 48100243.0,
+      "mtime": 1785169816.3259
+    },
+    "Vince Carter Top 20 NBA Career Dunks-1920x1080-avc1-mp4a.mp4": {
+      "size": 119459421.0,
+      "mtime": 1785169076.6644225
+    }
+  },
+  "started_at": "2026-07-27T16:30:43.745513+00:00",
+  "started_epoch": 1785169843.74554,
+  "updated_at": "2026-07-27T16:31:17.377449+00:00",
+  "error": "",
+  "detected_filename": "Top 10 Posters Dunks - Vince Carter Career-1280x720-mp4a (1).mp4",
+  "attached_file_path": "C:/Users/hpier/OneDrive/Desktop/CourtVisionAI/backend/data/clip_finder/attached/2b1d4b39-0d54-421e-a159-86f135e69dc0/Top 10 Posters Dunks - Vince Carter Career [nJ8uc2iZjy4].mp4",
+  "attached_filename": "Top 10 Posters Dunks - Vince Carter Career [nJ8uc2iZjy4].mp4",
+  "completed_at": "2026-07-27T16:31:17.377405+00:00"
+}

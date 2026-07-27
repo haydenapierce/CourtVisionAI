@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -31,11 +31,24 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 
-# Runtime data
-backend/data/
-data/
+# Ignore general runtime data
+backend/data/*
+data/*
 
-# Keep folders but ignore contents
+# Allow required Clip Finder project state
+!backend/data/clip_finder/
+backend/data/clip_finder/*
+!backend/data/clip_finder/projects/
+!backend/data/clip_finder/projects/**
+!backend/data/clip_finder/pending_download.json
+
+!data/clip_finder/
+data/clip_finder/*
+!data/clip_finder/projects/
+!data/clip_finder/projects/**
+!data/clip_finder/pending_download.json
+
+# Keep optional placeholders
 !backend/data/.gitkeep
 !data/.gitkeep
 
@@ -49,7 +62,7 @@ data/
 *.flv
 *.m4v
 
-# Clip Finder media
+# Clip Finder downloaded media
 backend/data/clip_finder/inbox/
 backend/data/clip_finder/attached/
 data/clip_finder/inbox/
